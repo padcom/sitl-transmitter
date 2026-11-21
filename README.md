@@ -4,7 +4,9 @@ A pass-through virtual transmitter for [ArduPilot SITL](https://ardupilot.org/de
 It reads one USB gamepad or radio through [pico-gamepad](https://github.com/padcom/pico-gamepad) and writes its channels, as a
 receiver would, to SITL's UDP RC input on `127.0.0.1`. SITL keeps the last values, so the vehicle behaves as if a transmitter were
 switched on; the vehicle's own `RCMAP_*`, `RCn_REVERSED`, `RCn_DZ` and `RCn_MIN/TRIM/MAX` do all the role mapping, inversion and
-dead zones. **No mapping, no calibration, no profile.** Linux only (pico-gamepad's only backend), SITL only.
+dead zones. **No mapping, no calibration, no profile.** Linux only (pico-gamepad's only backend), SITL only. It sends to
+`127.0.0.1` unless you give `--host <ip|name>` (for a SITL that lives in a virtual machine: SITL binds its RC input on `0.0.0.0`);
+any other host is an explicit choice, and the program says so ("sending to <host>:<port>: for ArduPilot SITL only").
 
 **Status: the skeleton (T0).** The program prints its version and nothing else yet. The pad, the packet, the start gate, the
 sender and the command line follow (stories T1 and T2); the plan is `shared/decisions/sitl-transmitter.md` of the team's
