@@ -99,8 +99,8 @@ export class UdpSink implements Sink {
   }
 }
 
-/// The socket for `address:port`, bound to an address of the system's choosing (the one a packet to `address` leaves by), or null with
-/// the reason in `problem`.
+/// The socket for `address:port`: bound to the loopback address when `address` is loopback (127.x), and otherwise to every interface
+/// (the system picks the one a packet to `address` leaves by); or null with the reason in `problem`.
 export class Made {
   public sink: UdpSink? = null
   public problem: string = ""
@@ -109,7 +109,7 @@ export class Made {
 export async function makeSink(address: string, port: int): Promise<Made> {
   const made = new Made()
   try {
-    const socket = await bind(0, "0.0.0.0")
+    const socket = await bind(0, if (address.startsWith("127.")) "127.0.0.1" else "0.0.0.0")
     made.sink = new UdpSink(socket, address, port)
   } catch (e: Error) {
     made.problem = `the UDP socket could not be made: ${e.message}`

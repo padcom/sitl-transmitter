@@ -3,7 +3,7 @@
 // as a `Sink` and the keyboard only as a `Control`, so the tests run it all without a device, a socket or a sleep.
 import { Layout } from "./channels"
 import { Options } from "./cli"
-import { Config, Machine, WAITING } from "./gate"
+import { Config, Machine, WAITING, lateFor } from "./gate"
 import { Sink } from "./sender"
 import { Source } from "./source"
 
@@ -81,7 +81,10 @@ export async function run(options: Options, source: Source, sink: Sink, clock: T
     return 3
   }
   const layout = new Layout(source.axes(), source.buttons(), options.offset)
-  const machine = new Machine(new Config(layout, options.sticks, options.throttleLow, options.rudderArm))
+  const period = Math.round(1000.0 / (options.rate as f64)) as int
+  const config = new Config(layout, options.sticks, options.throttleLow, options.rudderArm)
+  config.lateMs = lateFor(period)
+  const machine = new Machine(config)
   const refusal = machine.problem()
   if (refusal != "") {
     out.line(refusal)
@@ -95,7 +98,6 @@ export async function run(options: Options, source: Source, sink: Sink, clock: T
   } else {
     out.line("Press Enter to start sending (q + Enter ends it)")
   }
-  const period = Math.round(1000.0 / (options.rate as f64)) as int
   const begin = clock.now()
   const limit = if (options.exitAfter > 0) begin + options.exitAfter * 1000 else -1
   let next = begin
@@ -142,7 +144,7 @@ export async function run(options: Options, source: Source, sink: Sink, clock: T
     }
     if (!options.quiet && now >= nextStatus) {
       nextStatus = now + 1000
-      out.line(`${machine.state}: ${source.name()}, ${machine.frames} packets, CH1..CH8 ${channels(last)}`)
+      out.line(`${machine.state}: ${source.name()}, ${machine.frames} packets, CH1..CH8 ${channels(last)}, sending to ${destination}: for ArduPilot SITL only`)
     }
     next += period
     const waiting = next - clock.now()

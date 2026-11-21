@@ -69,7 +69,9 @@ jobs:
         if: ${{ !matrix.linux }}
         run: |
           echo "::warning::signals.linux.pi and signals.linux.test.pi aren't linted on ${{ matrix.target }}: Linux only."
-          pico lint main.pi app.pi cli.pi channels.pi packet.pi gate.pi runner.pi sender.pi source.pi fakepad.pi devicesource.pi signals.pi testing.pi version.pi version.test.pi pad.test.pi channels.test.pi packet.test.pi gate.test.pi cli.test.pi fakepad.test.pi sender.test.pi devicesource.test.pi runner.test.pi app.test.pi
+          # (every .pi file except the *.linux.* ones: a new file is picked up by itself)
+          files=$(ls *.pi | grep -v '\.linux\.')
+          pico lint $files
       - name: Tests
         if: ${{ matrix.linux }}
         run: |
@@ -79,7 +81,9 @@ jobs:
         if: ${{ !matrix.linux }}
         run: |
           echo "::warning::signals.linux.test.pi is skipped on ${{ matrix.target }}: it needs Linux."
-          pico test version.test.pi pad.test.pi channels.test.pi packet.test.pi gate.test.pi cli.test.pi fakepad.test.pi sender.test.pi devicesource.test.pi runner.test.pi app.test.pi | tee "$RUNNER_TEMP/test.log"
+          # (every *.test.pi except the *.linux.* ones: a new test file is picked up by itself)
+          files=$(ls *.test.pi | grep -v '\.linux\.')
+          pico test $files | tee "$RUNNER_TEMP/test.log"
           bash .github/tests-ran.sh "$RUNNER_TEMP/test.log"
       - name: The program builds
         run: pico build main.pi -o "$RUNNER_TEMP/sitl-transmitter${{ startsWith(matrix.target, 'windows') && '.exe' || '' }}"

@@ -20,6 +20,8 @@ export class Clock {
 export class FakeTime implements Time {
   public ms: int = 0
   public waits: int = 0
+  /// Every second wait lasts this many ms longer than asked (a scheduler that is late).
+  public jitter: int = 0
   public whens: int[] = []
   public actions: (() => void)[] = []
 
@@ -33,8 +35,8 @@ export class FakeTime implements Time {
   }
 
   public async wait(delay: int): Promise<void> throws Error {
-    ms += delay
     waits += 1
+    ms += delay + (if (jitter > 0 && waits % 2 == 1) jitter else 0)
     for (let i = 0; i < whens.length; i++) {
       if (whens[i] >= 0 && whens[i] <= ms) {
         whens[i] = -1

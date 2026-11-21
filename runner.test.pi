@@ -229,6 +229,14 @@ async function theStatusLineIsSaidOnceASecondUnlessQuiet(): Promise<void> throws
     }
   }
   expect(statuses >= 2).toBe(true)
+  // (every status line says where it goes, and that it is for SITL only)
+  let withDestination = 0
+  for (const s of loud.said.said) {
+    if (s.startsWith("sending: fake pad") && s.endsWith("sending to 127.0.0.1:5501: for ArduPilot SITL only")) {
+      withDestination += 1
+    }
+  }
+  expect(withDestination).toBe(statuses)
   const silent = new Run()
   await silent.go(goOptions(3), sourceOf(REST))
   for (const s of silent.said.said) {
@@ -236,7 +244,24 @@ async function theStatusLineIsSaidOnceASecondUnlessQuiet(): Promise<void> throws
   }
 }
 
+async function atTheSlowestRateALateTickIsNotAStall(): Promise<void> throws Error {
+  const r = new Run()
+  r.time.jitter = 50
+  const options = goOptions(5)
+  options.rate = 10
+  await r.go(options, sourceOf(REST))
+  expect(r.code).toBe(0)
+  // (a 100 ms period with ticks up to 150 ms apart: steady frames, and not one neutral frame before the two at the end)
+  const n = r.sink.frames.length
+  expect(n > 30).toBe(true)
+  for (let i = 0; i < n - 2; i++) {
+    expect(text(r.sink.frames[i]) == NEUTRAL).toBe(false)
+  }
+  expect(r.said.has("the pad stalled or went")).toBe(false)
+}
+
 describe("a run", () => {
+  it("does not take a tick that is late at --rate 10 for a stall", atTheSlowestRateALateTickIsNotAStall)
   it("sends frames at the rate after the gate, and the neutral frame twice at the end", aRunSendsFramesAtTheRateAfterTheGateAndTheNeutralFrameTwiceAtTheEnd)
   it("sends nothing while a stick is off, and the gate says which", nothingIsSentWhileAStickIsOffAndTheGateSaysWhich)
   it("that never passes the gate sends nothing, not even the neutral frame", aRunThatNeverPassesTheGateSendsNothingNotEvenTheNeutralFrame)

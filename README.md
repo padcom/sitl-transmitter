@@ -43,7 +43,7 @@ stick, a trigger that rests at -1 or the wrong pad from reaching the vehicle whe
 of `--sticks` (default `1,2,3,4`: set it to the vehicle's `RCMAP_ROLL,PITCH,THROTTLE,YAW`), and each must be an **axis** of the pad: a
 stick that lands on a button, or on nothing, ends the program with 4 and names it.
 
-After any loss (a pad that was unplugged, or a tick that came more than 100 ms late) **one neutral frame** is sent (roll, pitch and yaw
+After any loss (a pad that was unplugged, or a tick that came too late: more than 100 ms, or three periods at `--rate` under 30) **one neutral frame** is sent (roll, pitch and yaw
 in the middle, the throttle in the middle or at the bottom by its rest, every other channel 0 = untouched) and the gate runs again. A
 pad that comes back is found again by **its own id** (never another pad), and Enter is not asked again.
 
@@ -70,7 +70,9 @@ hold: do not rely on it where that matters.
 
 `q` + Enter, the end of input at a terminal, `--exit-after <s>`, and **Ctrl-C / `kill` (SIGINT, SIGTERM, SIGHUP) on Linux** end it
 with **the neutral frame sent twice, 20 ms apart**. (Pico cannot catch a signal, so the program blocks them and looks for one every
-20 ms; `signals.linux.test.pi` is the proof that a blocked signal sent to the process does not end it.) **A run that never passed the
+20 ms; `signals.linux.test.pi` is the proof that a blocked signal sent to the process does not end it. The look happens between ticks, so while
+the program waits in a name lookup (`--host`) or in the two-second retry of a pad that the desktop has not yet given access to, **Ctrl-C does
+nothing until that wait is over**; nothing has been sent by then.) **A run that never passed the
 gate owes no neutral frame**: it has touched nothing in SITL, so it sends nothing at the end. `kill -9`, a crash or a power cut
 leave SITL with the last values (a stuck stick): the vehicle keeps flying on them. Do not rely on it for anything else.
 
