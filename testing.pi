@@ -1,0 +1,58 @@
+// Helpers for the tests: a clock the test moves, a TX16S-shaped layout and readings at rest.
+import { Layout } from "./channels"
+import { Config, Machine, Reading } from "./gate"
+
+/// A clock in ms that only a test moves.
+export class Clock {
+  public now: int = 0
+
+  public advance(ms: int): int {
+    now += ms
+    return now
+  }
+}
+
+/// A TX16S: 8 axes and 24 buttons (CH1..CH8 axes, CH9..CH16 buttons 0..7, the other buttons dropped).
+export function radio(offset: int = 0): Layout {
+  return new Layout(8, 24, offset)
+}
+
+/// `n` axes at the middle (0.0), the throttle (axis 2) at `throttle`.
+export function axesAt(n: int, throttle: f64): f64[] {
+  const axes: f64[] = []
+  for (let i = 0; i < n; i++) {
+    axes.push(if (i == 2) throttle else 0.0)
+  }
+  return axes
+}
+
+/// `n` buttons, all released.
+export function released(n: int): bool[] {
+  const buttons: bool[] = []
+  for (let i = 0; i < n; i++) {
+    buttons.push(false)
+  }
+  return buttons
+}
+
+/// A reading of a TX16S with the sticks at rest (the throttle in the middle) and every button released.
+export function restingRadio(): Reading {
+  return new Reading(axesAt(8, 0.0), released(24))
+}
+
+/// The usual config: a TX16S, the sticks on RC channels 1..4, the throttle resting in the middle, the yaw held.
+export function config(throttleLow: bool = false, rudderArm: bool = false): Config {
+  return new Config(radio(), [1, 2, 3, 4], throttleLow, rudderArm)
+}
+
+/// A machine that has seen its pad, been told go, and passed the gate (10 right reads): the next tick sends.
+export function sendingMachine(clock: Clock, throttleLow: bool = false, rudderArm: bool = false): Machine {
+  const machine = new Machine(config(throttleLow, rudderArm))
+  machine.padOpened()
+  machine.start()
+  const rest = new Reading(axesAt(8, if (throttleLow) -1.0 else 0.0), released(24))
+  for (let i = 0; i < 10; i++) {
+    machine.tick(clock.advance(20), rest)
+  }
+  return machine
+}

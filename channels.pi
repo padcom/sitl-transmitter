@@ -1,0 +1,111 @@
+// What the pad says -> the 16 PWM values a receiver would give (section 5 of the plan): axes first, then buttons, onto RC channels
+// 1..16 (after an offset), each axis as 1000..2000 µs straight from its -1..1, each button as 1000 or 2000, and 0 ("ignore: keep what
+// you have") for every channel the pad does not drive. No dead zone, no curve, no inversion, no calibration: the vehicle does all of
+// that (its RCMAP_*, RCn_REVERSED, RCn_DZ, RCn_MIN/MAX). Pure: arrays in, array out.
+
+/// How many channels a frame has (and a packet: two bytes each).
+export const RC_CHANNELS = 16
+
+/// The pulses of the ends and the middle of an axis, in µs.
+export const PWM_LOW = 1000
+export const PWM_MID = 1500
+export const PWM_HIGH = 2000
+
+/// An axis value held to -1..1; what is not a number (it cannot come from a device) is the middle.
+export function clamp(v: f64): f64 {
+  if (v != v) {
+    return 0.0
+  }
+  return if (v < -1.0) -1.0 else if (v > 1.0) 1.0 else v
+}
+
+/// The pulse of an axis: `round(1500 + 500 * v)`, 1000..2000. The kernel's `flat` is not applied.
+export function pwmOfAxis(v: f64): int {
+  return Math.round(1500.0 + 500.0 * clamp(v)) as int
+}
+
+/// The pulse of a button: released 1000, pressed 2000.
+export function pwmOfButton(pressed: bool): int {
+  return if (pressed) PWM_HIGH else PWM_LOW
+}
+
+/// Which RC channel each axis and button of a pad goes to. The axes take RC channels `1 + offset` on, the buttons the channels after
+/// them, while there are channels left (<= 16): what does not fit is dropped, and counted.
+export class Layout {
+  public readonly axes: int
+  public readonly buttons: int
+  public readonly offset: int
+  /// The RC channel (1..16) of each axis and of each button, 0 for one that does not fit.
+  public readonly channelOfAxis: int[] = []
+  public readonly channelOfButton: int[] = []
+  /// How many axes and buttons do not fit.
+  public droppedAxes: int = 0
+  public droppedButtons: int = 0
+
+  constructor(axes: int, buttons: int, offset: int) {
+    this.axes = axes
+    this.buttons = buttons
+    this.offset = offset
+    for (let i = 0; i < axes; i++) {
+      const channel = i + 1 + offset
+      if (channel <= RC_CHANNELS) {
+        channelOfAxis.push(channel)
+      } else {
+        channelOfAxis.push(0)
+        droppedAxes += 1
+      }
+    }
+    for (let j = 0; j < buttons; j++) {
+      const channel = axes + j + 1 + offset
+      if (channel <= RC_CHANNELS) {
+        channelOfButton.push(channel)
+      } else {
+        channelOfButton.push(0)
+        droppedButtons += 1
+      }
+    }
+  }
+
+  /// The index of the axis that drives RC channel `channel`, or -1 when none does (a button does, or nothing).
+  public axisOf(channel: int): int {
+    for (let i = 0; i < channelOfAxis.length; i++) {
+      if (channelOfAxis[i] == channel) {
+        return i
+      }
+    }
+    return -1
+  }
+}
+
+/// A frame with nothing in it: 16 times 0 (every channel ignored).
+export function emptyFrame(): int[] {
+  const frame: int[] = []
+  for (let i = 0; i < RC_CHANNELS; i++) {
+    frame.push(0)
+  }
+  return frame
+}
+
+/// The 16 pulses for a read of the pad. `axes` and `buttons` are what the pad says now (axes -1..1, buttons pressed or not); a
+/// channel the layout does not give, or a value the read does not have, stays 0. `yawChannel` is the RC channel whose axis is held
+/// to `-yawLimit..yawLimit` first (1.0 for no limit): the yaw clamp of the start gate.
+export function frameOf(layout: Layout, axes: f64[], buttons: bool[], yawChannel: int, yawLimit: f64): int[] {
+  const frame = emptyFrame()
+  for (let i = 0; i < layout.channelOfAxis.length && i < axes.length; i++) {
+    const channel = layout.channelOfAxis[i]
+    if (channel > 0) {
+      let v = clamp(axes[i])
+      if (channel == yawChannel) {
+        v = if (v < -yawLimit) -yawLimit else if (v > yawLimit) yawLimit else v
+      }
+      frame[channel - 1] = pwmOfAxis(v)
+    }
+  }
+  for (let j = 0; j < layout.channelOfButton.length && j < buttons.length; j++) {
+    const channel = layout.channelOfButton[j]
+    if (channel > 0) {
+      frame[channel - 1] = pwmOfButton(buttons[j])
+    }
+  }
+  return frame
+}

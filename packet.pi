@@ -1,0 +1,36 @@
+// The datagram SITL's UDP RC input takes (AP_RCProtocol_UDP): 16 channels of uint16, little-endian, in µs: 32 bytes (it accepts only
+// 16 or 32 bytes: anything else is "Malformed SITL RC input"). A channel of 0 means "keep what you have".
+import { RC_CHANNELS } from "./channels"
+
+/// The size of a packet in bytes.
+export const PACKET_BYTES = 32
+
+/// A frame of 16 pulses as the 32 bytes of a packet. A value is held to 0..65535 (what a channel can say); a frame that is short is
+/// completed with zeros (ignore), one that is long is cut: a packet is always exactly 32 bytes.
+export function packetOf(frame: int[]): Uint8Array {
+  const bytes = new Uint8Array(PACKET_BYTES)
+  for (let i = 0; i < RC_CHANNELS; i++) {
+    let v = if (i < frame.length) frame[i] else 0
+    if (v < 0) {
+      v = 0
+    }
+    if (v > 65535) {
+      v = 65535
+    }
+    bytes.set(2 * i, v & 0xff)
+    bytes.set(2 * i + 1, (v >> 8) & 0xff)
+  }
+  return bytes
+}
+
+/// The frame a packet carries (for tests, and for a fake receiver that checks what was sent). A packet that is not 32 bytes has none.
+export function frameOfPacket(bytes: Uint8Array): int[] {
+  const frame: int[] = []
+  if (bytes.length != PACKET_BYTES) {
+    return frame
+  }
+  for (let i = 0; i < RC_CHANNELS; i++) {
+    frame.push((bytes.get(2 * i) as int) | ((bytes.get(2 * i + 1) as int) << 8))
+  }
+  return frame
+}

@@ -1,0 +1,227 @@
+// The start gate and the run states of the transmitter (section 6 of the plan), as a machine driven by calls and a clock in
+// milliseconds: no pad, no socket, no timer of its own. States: `waiting-for-pad` -> `ready` -> `gate` -> `sending` (back to `gate`
+// after a gap, to `waiting-for-pad` after a loss). NOTHING IS SENT until `sending` is reached, and after any loss the gate runs
+// again: the four sticks (by the vehicle's RCMAP channels) must be present axes, roll/pitch/yaw within 0.15 of the middle and the
+// throttle at its rest (the middle, or the bottom), for 10 reads in a row. In `sending` every tick a FRESH reading is turned into a
+// frame (the yaw held to +-0.8 while the throttle is at the bottom, unless the sticks may arm); a tick more than 100 ms late, or a
+// pad that went, gives ONE neutral frame and the gate again.
+import { Layout, PWM_MID, PWM_LOW, emptyFrame, frameOf } from "./channels"
+
+export const WAITING = "waiting-for-pad"
+export const READY = "ready"
+export const GATE = "gate"
+export const SENDING = "sending"
+
+/// How far from the middle a stick may be at the gate (of -1..1), how low the throttle must be when it rests low, and how many reads
+/// in a row the sticks must be right.
+export const BAND = 0.15
+export const LOW = -0.85
+export const READS = 10
+/// A tick later than this (ms) after the last frame is a stall: neutral, and the gate again.
+export const LATE_MS = 100
+/// The throttle value at or under which the yaw is held, and what it is held to (pwm 1100..1900).
+export const BOTTOM = -0.8
+export const YAW_LIMIT = 0.8
+/// How often the gate says which stick is off (ms).
+export const MESSAGE_MS = 1000
+
+/// The names of the four sticks, in the order of `--sticks`.
+const STICKS = ["roll", "pitch", "throttle", "yaw"]
+
+/// The mapping the machine is held to.
+export class Config {
+  public readonly layout: Layout
+  /// The RC channels of roll, pitch, throttle, yaw (the vehicle's `RCMAP_*`).
+  public readonly sticks: int[]
+  /// Whether the throttle rests low (the stick at the bottom) and not in the middle.
+  public readonly throttleLow: bool
+  /// Whether the sticks may arm and disarm: the yaw is then not held.
+  public readonly rudderArm: bool
+
+  constructor(layout: Layout, sticks: int[], throttleLow: bool, rudderArm: bool) {
+    this.layout = layout
+    this.sticks = sticks
+    this.throttleLow = throttleLow
+    this.rudderArm = rudderArm
+  }
+}
+
+/// What the pad says now (a `PadState`'s axes -1..1 and buttons), and nothing else: the machine has no idea of a device.
+export class Reading {
+  public readonly axes: f64[]
+  public readonly buttons: bool[]
+
+  constructor(axes: f64[], buttons: bool[]) {
+    this.axes = axes
+    this.buttons = buttons
+  }
+}
+
+/// What a tick asks of the caller: nothing (`none`, perhaps with a line to say), a frame to send (`frame`), one neutral frame (`neutral`)
+/// or the end of the program (`refused`, the message says why: the exit code is 4).
+export class Step {
+  public readonly kind: string
+  public readonly frame: int[]
+  public readonly message: string
+
+  constructor(kind: string, frame: int[], message: string) {
+    this.kind = kind
+    this.frame = frame
+    this.message = message
+  }
+}
+
+/// A reading with its sign and two decimals (three for a small one that is not 0, so it never reads +0.00): "+0.72", "-0.004".
+export function signed(v: f64): string {
+  const small = v != 0.0 && Math.abs(v) < 0.01
+  const per = if (small) 1000 else 100
+  const digits = if (small) 3 else 2
+  const n = Math.round(Math.abs(v) * (per as f64)) as int
+  const whole = Math.floor((n as f64) / (per as f64)) as int
+  let fraction = `${n - whole * per}`
+  while (fraction.length < digits) {
+    fraction = "0" + fraction
+  }
+  return `${if (v < 0.0) "-" else "+"}${whole}.${fraction}`
+}
+
+/// The frame of "no input": roll, pitch and yaw in the middle, the throttle in the middle (it rests there) or at the bottom (it rests
+/// low), every other channel 0 (ignore: the switches keep their last position, as on a radio).
+export function neutralFrame(config: Config): int[] {
+  const frame = emptyFrame()
+  frame[config.sticks[0] - 1] = PWM_MID
+  frame[config.sticks[1] - 1] = PWM_MID
+  frame[config.sticks[2] - 1] = if (config.throttleLow) PWM_LOW else PWM_MID
+  frame[config.sticks[3] - 1] = PWM_MID
+  return frame
+}
+
+export class Machine {
+  public readonly config: Config
+  public state: string = WAITING
+  /// Whether the person has said go (Enter, or `--go`): a re-plug does not ask again.
+  public started: bool = false
+  /// Whether any frame was ever sent: a neutral frame is only owed to a receiver that was given something.
+  public sentAny: bool = false
+  public frames: int = 0
+  /// The reads in a row that were right at the gate.
+  public good: int = 0
+  public lastMessageAt: int = -1000000
+  public lastFrameAt: int = 0
+
+  constructor(config: Config) {
+    this.config = config
+  }
+
+  /// The reason a stick cannot be read at all, or "": a stick's RC channel must be driven by an AXIS of the pad (not a button, not
+  /// absent). The program ends with exit code 4 and this line.
+  public problem(): string {
+    for (let i = 0; i < STICKS.length; i++) {
+      if (config.layout.axisOf(config.sticks[i]) < 0) {
+        return `${STICKS[i]} is on RC channel ${config.sticks[i]}, which is not an axis of this pad (a button, or nothing): check --sticks and --offset`
+      }
+    }
+    return ""
+  }
+
+  /// The pad was opened: the first time `ready` (the banner, and Enter unless `--go`), after a loss the gate again.
+  public padOpened(): void {
+    if (state == WAITING) {
+      state = if (started) GATE else READY
+      good = 0
+    }
+  }
+
+  /// The person said go (or `--go`): from `ready` to the gate.
+  public start(): void {
+    started = true
+    if (state == READY) {
+      state = GATE
+      good = 0
+    }
+  }
+
+  /// A frame of the neutral kind for the end of the program or a loss.
+  public neutral(): int[] {
+    return neutralFrame(config)
+  }
+
+  /// The pad is gone (an error of its read, or none): one neutral frame if the receiver was being given frames, and the machine waits
+  /// for the same pad.
+  public lost(): Step {
+    const wasSending = state == SENDING
+    state = WAITING
+    good = 0
+    return if (wasSending) new Step("neutral", neutral(), "") else new Step("none", [], "")
+  }
+
+  /// One tick, at `now` (ms, a clock that only goes forward), with a FRESH reading of the pad (null when there is none).
+  public tick(now: int, reading: Reading?): Step {
+    if (state == WAITING || state == READY) {
+      return new Step("none", [], "")
+    }
+    if (reading == null) {
+      return lost()
+    }
+    return if (state == GATE) atGate(now, reading!) else sending(now, reading!)
+  }
+
+  /// The throttle at rest, by `--throttle-rest`.
+  private throttleRests(v: f64): bool {
+    return if (config.throttleLow) v <= LOW else Math.abs(v) <= BAND
+  }
+
+  /// The first stick that is not at rest, as a line ("roll is not at the middle: +0.72"), or "".
+  private offStick(axes: f64[]): string {
+    for (let i = 0; i < STICKS.length; i++) {
+      const index = config.layout.axisOf(config.sticks[i])
+      const v = if (index >= 0 && index < axes.length) axes[index] else 0.0
+      const throttle = i == 2
+      const fine = if (throttle) throttleRests(v) else Math.abs(v) <= BAND
+      if (!fine) {
+        const place = if (throttle) (if (config.throttleLow) "at the bottom" else "in the middle") else "at the middle"
+        return `${STICKS[i]} is not ${place}: ${signed(v)}`
+      }
+    }
+    return ""
+  }
+
+  private atGate(now: int, reading: Reading): Step {
+    const refusal = problem()
+    if (refusal != "") {
+      return new Step("refused", [], refusal)
+    }
+    const off = offStick(reading.axes)
+    if (off != "") {
+      good = 0
+      if (now - lastMessageAt >= MESSAGE_MS) {
+        lastMessageAt = now
+        return new Step("none", [], off)
+      }
+      return new Step("none", [], "")
+    }
+    good += 1
+    if (good >= READS) {
+      state = SENDING
+      lastFrameAt = now
+    }
+    return new Step("none", [], "")
+  }
+
+  private sending(now: int, reading: Reading): Step {
+    if (now - lastFrameAt > LATE_MS) {
+      // (a stall: what the pad said is not what it says now, and nothing was sent in between: neutral, and the gate again)
+      state = GATE
+      good = 0
+      return new Step("neutral", neutral(), "")
+    }
+    const throttleIndex = config.layout.axisOf(config.sticks[2])
+    const throttle = if (throttleIndex >= 0 && throttleIndex < reading.axes.length) reading.axes[throttleIndex] else 0.0
+    const held = !config.rudderArm && throttle <= BOTTOM
+    const frame = frameOf(config.layout, reading.axes, reading.buttons, config.sticks[3], if (held) YAW_LIMIT else 1.0)
+    lastFrameAt = now
+    sentAny = true
+    frames += 1
+    return new Step("frame", frame, "")
+  }
+}
