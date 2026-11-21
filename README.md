@@ -105,7 +105,8 @@ listens on **UDP 5501 + 10 × instance** (`-I n`) when it derives the RC port fr
 arducopter -w --model quad --speedup 1 -I 0 --sim-address=127.0.0.1 [--defaults <file>]
 ```
 
-and then this program needs no port option for instance 0 (5501); for instance 2 use `--instance 2` (5521) where SITL derives its port from `-I`, or `--port` to name the port `ss` shows.
+and then this program needs no port option for instance 0 (5501); where SITL derives its port from `-I`, `--instance 2` is 5521 and
+`--instance 1000` is 15501 (any instance up to 6003, port 65531); otherwise name the port `ss` shows with `--port`.
 **`sim_vehicle.py` starts MAVProxy, which feeds the same RC input itself**: do not use MAVProxy's `rc` together with this program, and do
 not turn on the app's "Allow remote control" at the same time: a second source fights over the same channels.
 
@@ -126,7 +127,7 @@ that it has RC input (or watch the channels in the app's Setup > Radio).
 ```
 --list                      list the pads and exit
 --pad <n|id|text>           the list index, the exact id, or a part of the name (default: the only pad)
---instance <n>              SITL instance (-I n): port = 5501 + 10 n, only where SITL derives its RC port from -I (verify with ss -ulpn)
+--instance <n>              SITL instance (-I n), 0..6003: port = 5501 + 10 n, only where SITL derives its RC port from -I (verify with ss -ulpn)
 --port <p>                  UDP port 1024..65535; wins over --instance (default 5501)
 --host <ip|name>            where SITL runs (default 127.0.0.1)
 --rate <hz>                 send rate 10..100 (default 50)
