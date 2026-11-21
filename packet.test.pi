@@ -1,0 +1,61 @@
+// The 32 bytes SITL takes: 16 channels of uint16, little-endian.
+import { describe, it, expect } from "std/test"
+import { PACKET_BYTES, frameOfPacket, packetOf } from "./packet"
+
+function text(frame: int[]): string {
+  let out = ""
+  for (let i = 0; i < frame.length; i++) {
+    out += (if (i > 0) "," else "") + `${frame[i]}`
+  }
+  return out
+}
+
+function aPacketIsThirtyTwoBytes(): void {
+  expect(PACKET_BYTES).toBe(32)
+  expect(packetOf([]).length).toBe(32)
+  expect(packetOf([1500, 1500, 1500, 1500]).length).toBe(32)
+}
+
+function theChannelsAreLittleEndianInOrder(): void {
+  const frame = [1000, 1500, 2000, 1234, 0, 65535, 256, 1]
+  const bytes = packetOf(frame)
+  // 1000 = 0x03E8, 1500 = 0x05DC, 2000 = 0x07D0, 1234 = 0x04D2
+  expect(`${bytes.get(0)} ${bytes.get(1)} ${bytes.get(2)} ${bytes.get(3)} ${bytes.get(4)} ${bytes.get(5)} ${bytes.get(6)} ${bytes.get(7)}`).toBe("232 3 220 5 208 7 210 4")
+  expect(`${bytes.get(8)} ${bytes.get(9)} ${bytes.get(10)} ${bytes.get(11)} ${bytes.get(12)} ${bytes.get(13)} ${bytes.get(14)} ${bytes.get(15)}`).toBe("0 0 255 255 0 1 1 0")
+}
+
+function aChannelThatIsNotThereIsZeroForSitlToIgnore(): void {
+  const bytes = packetOf([1500])
+  let rest = 0
+  for (let i = 2; i < 32; i++) {
+    rest += bytes.get(i) as int
+  }
+  expect(rest).toBe(0)
+}
+
+function aValueIsHeldToWhatAChannelCanSay(): void {
+  expect(text(frameOfPacket(packetOf([-5, 70000, 800])).slice(0, 3))).toBe("0,65535,800")
+}
+
+function aFrameSurvivesThePacket(): void {
+  const frame = [1000, 1500, 2000, 1500, 1100, 1900, 0, 0, 1000, 1000, 2000, 1000, 1000, 1000, 1000, 2000]
+  expect(text(frameOfPacket(packetOf(frame)))).toBe(text(frame))
+}
+
+function aLongFrameIsCutAndAPacketOfAnotherSizeHasNoFrame(): void {
+  const long: int[] = []
+  for (let i = 0; i < 20; i++) {
+    long.push(1500)
+  }
+  expect(packetOf(long).length).toBe(32)
+  expect(frameOfPacket(new Uint8Array(16)).length).toBe(0)
+}
+
+describe("the packet", () => {
+  it("is 32 bytes whatever the frame", aPacketIsThirtyTwoBytes)
+  it("has the channels as little-endian uint16, in order", theChannelsAreLittleEndianInOrder)
+  it("has 0 for a channel the frame does not have: SITL keeps its value", aChannelThatIsNotThereIsZeroForSitlToIgnore)
+  it("holds a value to 0..65535", aValueIsHeldToWhatAChannelCanSay)
+  it("carries a frame through and back", aFrameSurvivesThePacket)
+  it("cuts a long frame, and a packet of another size carries no frame", aLongFrameIsCutAndAPacketOfAnotherSizeHasNoFrame)
+})

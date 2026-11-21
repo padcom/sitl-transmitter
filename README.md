@@ -8,9 +8,11 @@ dead zones. **No mapping, no calibration, no profile.** Linux only (pico-gamepad
 `127.0.0.1` unless you give `--host <ip|name>` (for a SITL that lives in a virtual machine: SITL binds its RC input on `0.0.0.0`);
 any other host is an explicit choice, and the program says so ("sending to <host>:<port>: for ArduPilot SITL only").
 
-**Status: the skeleton (T0).** The program prints its version and nothing else yet. The pad, the packet, the start gate, the
-sender and the command line follow (stories T1 and T2); the plan is `shared/decisions/sitl-transmitter.md` of the team's
-repository. This README grows with them (the SITL launch line, the first run, the start gate in words, the TX16S notes, and the
+**Status: the core (T1).** The program still prints only its version. The core is there and tested without hardware: `channels.pi`
+(the pad's axes and buttons to the 16 pulses), `packet.pi` (the 32 bytes SITL takes) and `gate.pi` (the start gate and the run
+states: nothing is sent until the sticks have been at rest for 10 reads, a stalled tick or a lost pad gives one neutral frame and
+the gate again, the yaw is held to 80 % while the throttle is at the bottom). The command line, the sender and the loop follow
+(story T2); the plan is `shared/decisions/sitl-transmitter.md` of the team's repository. This README grows with them (the SITL launch line, the first run, the start gate in words, the TX16S notes, and the
 warning that a killed process leaves SITL's last values).
 
 ## Build and test

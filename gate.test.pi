@@ -1,0 +1,289 @@
+// The start gate and the run states (section 6 of the plan), driven by a clock the test moves.
+import { describe, it, expect } from "std/test"
+import { Layout } from "./channels"
+import { BAND, Config, GATE, LATE_MS, Machine, READS, READY, Reading, SENDING, WAITING, neutralFrame, signed } from "./gate"
+import { Clock, axesAt, config, released, restingRadio, sendingMachine } from "./testing"
+
+function text(frame: int[]): string {
+  let out = ""
+  for (let i = 0; i < frame.length; i++) {
+    out += (if (i > 0) "," else "") + `${frame[i]}`
+  }
+  return out
+}
+
+/// A machine whose pad is open and that was told go: at the gate.
+function atTheGate(throttleLow: bool = false, rudderArm: bool = false): Machine {
+  const machine = new Machine(config(throttleLow, rudderArm))
+  machine.padOpened()
+  machine.start()
+  return machine
+}
+
+function readingWith(index: int, value: f64, throttle: f64 = 0.0): Reading {
+  const axes = axesAt(8, throttle)
+  axes[index] = value
+  return new Reading(axes, released(24))
+}
+
+// ---- the states ----
+
+function nothingIsSentBeforeThePadIsOpenedAndTheGoIsSaid(): void {
+  const clock = new Clock()
+  const machine = new Machine(config())
+  expect(machine.state).toBe(WAITING)
+  expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("none")
+  machine.padOpened()
+  expect(machine.state).toBe(READY)
+  for (let i = 0; i < 30; i++) {
+    expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("none")
+  }
+  expect(`${machine.state} ${machine.frames} ${machine.sentAny}`).toBe("ready 0 false")
+  machine.start()
+  expect(machine.state).toBe(GATE)
+}
+
+function nothingIsSentAtTheGateUntilTenReadsInARowAreRight(): void {
+  const clock = new Clock()
+  const machine = atTheGate()
+  for (let i = 0; i < READS - 1; i++) {
+    expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("none")
+    expect(machine.state).toBe(GATE)
+  }
+  expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("none")
+  expect(machine.state).toBe(SENDING)
+  expect(machine.frames).toBe(0)
+  expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("frame")
+  expect(`${machine.frames} ${machine.sentAny}`).toBe("1 true")
+}
+
+function aReadThatIsWrongStartsTheCountAgain(): void {
+  const clock = new Clock()
+  const machine = atTheGate()
+  for (let i = 0; i < READS - 1; i++) {
+    machine.tick(clock.advance(20), restingRadio())
+  }
+  machine.tick(clock.advance(20), readingWith(0, 0.5))
+  expect(machine.good).toBe(0)
+  for (let i = 0; i < READS - 1; i++) {
+    machine.tick(clock.advance(20), restingRadio())
+  }
+  expect(machine.state).toBe(GATE)
+  machine.tick(clock.advance(20), restingRadio())
+  expect(machine.state).toBe(SENDING)
+}
+
+// ---- the sticks it wants at rest ----
+
+function eachStickThatIsOffIsNamedWithItsValue(): void {
+  const clock = new Clock()
+  const lines: string[] = []
+  for (const index of [0, 1, 2, 3]) {
+    const machine = atTheGate()
+    const step = machine.tick(clock.advance(2000), readingWith(index, 0.72))
+    lines.push(step.message)
+  }
+  expect(lines[0]).toBe("roll is not at the middle: +0.72")
+  expect(lines[1]).toBe("pitch is not at the middle: +0.72")
+  expect(lines[2]).toBe("throttle is not in the middle: +0.72")
+  expect(lines[3]).toBe("yaw is not at the middle: +0.72")
+}
+
+function theBandIsFifteenPercentEitherWay(): void {
+  const clock = new Clock()
+  expect(BAND).toBe(0.15)
+  const inside = atTheGate()
+  inside.tick(clock.advance(20), readingWith(0, 0.15))
+  expect(inside.good).toBe(1)
+  const outside = atTheGate()
+  expect(outside.tick(clock.advance(2000), readingWith(0, -0.16)).message).toBe("roll is not at the middle: -0.16")
+}
+
+function aThrottleThatRestsLowMustBeAtTheBottom(): void {
+  const clock = new Clock()
+  const machine = atTheGate(true)
+  expect(machine.tick(clock.advance(2000), readingWith(5, 0.0, 0.0)).message).toBe("throttle is not at the bottom: +0.00")
+  expect(machine.tick(clock.advance(2000), readingWith(5, 0.0, -0.84)).message).toBe("throttle is not at the bottom: -0.84")
+  machine.tick(clock.advance(20), readingWith(5, 0.0, -0.85))
+  expect(machine.good).toBe(1)
+  // (and a throttle that rests in the middle is not at rest at the bottom)
+  const centred = atTheGate(false)
+  expect(centred.tick(clock.advance(2000), readingWith(5, 0.0, -1.0)).message).toBe("throttle is not in the middle: -1.00")
+}
+
+function theGateSaysWhichStickIsOffOnceASecond(): void {
+  const clock = new Clock()
+  const machine = atTheGate()
+  expect(machine.tick(clock.advance(1000), readingWith(0, 0.5)).message).toBe("roll is not at the middle: +0.50")
+  expect(machine.tick(clock.advance(20), readingWith(0, 0.5)).message).toBe("")
+  expect(machine.tick(clock.advance(900), readingWith(0, 0.5)).message).toBe("")
+  expect(machine.tick(clock.advance(100), readingWith(0, 0.5)).message).toBe("roll is not at the middle: +0.50")
+}
+
+function aSmallReadingIsNeverSaidAsPlusZero(): void {
+  expect(`${signed(0.72)} ${signed(-0.5)} ${signed(0.0)} ${signed(0.004)} ${signed(-0.0049)} ${signed(0.01)} ${signed(1.0)}`).toBe("+0.72 -0.50 +0.00 +0.004 -0.005 +0.01 +1.00")
+}
+
+function aStickOnAButtonOrNothingIsRefusedByName(): void {
+  const clock = new Clock()
+  // (the yaw on RC channel 12: a button of a TX16S)
+  const refused = new Machine(new Config(new Layout(8, 24, 0), [1, 2, 3, 12], false, false))
+  refused.padOpened()
+  refused.start()
+  const step = refused.tick(clock.advance(20), restingRadio())
+  expect(step.kind).toBe("refused")
+  expect(step.message).toBe("yaw is on RC channel 12, which is not an axis of this pad (a button, or nothing): check --sticks and --offset")
+  expect(refused.problem()).toBe(step.message)
+  // (and with an offset the first channels have no axis)
+  const offset = new Machine(new Config(new Layout(8, 24, 2), [1, 2, 3, 4], false, false))
+  expect(offset.problem()).toBe("roll is on RC channel 1, which is not an axis of this pad (a button, or nothing): check --sticks and --offset")
+  expect(atTheGate().problem()).toBe("")
+}
+
+// ---- the frames ----
+
+function theYawIsHeldToEightyPercentWhileTheThrottleIsAtTheBottom(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock, true)
+  const full = readingWith(3, 1.0, -1.0)
+  expect(text(machine.tick(clock.advance(20), full).frame).startsWith("1500,1500,1000,1900,")).toBe(true)
+  const other = readingWith(3, -1.0, -0.8)
+  expect(text(machine.tick(clock.advance(20), other).frame).startsWith("1500,1500,1100,1100,")).toBe(true)
+}
+
+function theYawIsNotHeldWhileTheThrottleIsUp(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock, true)
+  const up = readingWith(3, 1.0, -0.79)
+  expect(text(machine.tick(clock.advance(20), up).frame).startsWith("1500,1500,1105,2000,")).toBe(true)
+  const centred = sendingMachine(clock, false)
+  expect(text(centred.tick(clock.advance(20), readingWith(3, 1.0, 0.0)).frame).startsWith("1500,1500,1500,2000,")).toBe(true)
+}
+
+function theRudderArmOptionLiftsTheHold(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock, true, true)
+  const full = readingWith(3, 1.0, -1.0)
+  expect(text(machine.tick(clock.advance(20), full).frame).startsWith("1500,1500,1000,2000,")).toBe(true)
+}
+
+function everyFrameIsMadeOfAFreshReading(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock)
+  const first = machine.tick(clock.advance(20), readingWith(0, 0.5))
+  const second = machine.tick(clock.advance(20), readingWith(0, -0.5))
+  expect(`${first.frame[0]} ${second.frame[0]}`).toBe("1750 1250")
+}
+
+// ---- the neutral frame ----
+
+function theNeutralFrameHasTheSticksInTheMiddleAndEverythingElseAtZero(): void {
+  expect(text(neutralFrame(config(false)))).toBe("1500,1500,1500,1500,0,0,0,0,0,0,0,0,0,0,0,0")
+  expect(text(neutralFrame(config(true)))).toBe("1500,1500,1000,1500,0,0,0,0,0,0,0,0,0,0,0,0")
+}
+
+function theNeutralFrameFollowsTheSticksChannels(): void {
+  const odd = new Config(new Layout(8, 0, 0), [2, 1, 4, 3], true, false)
+  expect(text(neutralFrame(odd))).toBe("1500,1500,1500,1000,0,0,0,0,0,0,0,0,0,0,0,0")
+}
+
+// ---- gaps and losses ----
+
+function aLateTickGivesOneNeutralFrameAndTheGateAgain(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock)
+  expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("frame")
+  const late = machine.tick(clock.advance(LATE_MS + 1), restingRadio())
+  expect(late.kind).toBe("neutral")
+  expect(text(late.frame)).toBe("1500,1500,1500,1500,0,0,0,0,0,0,0,0,0,0,0,0")
+  expect(machine.state).toBe(GATE)
+  expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("none")
+  expect(machine.frames).toBe(1)
+}
+
+function aTickExactlyOnTheLimitIsNotLate(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock)
+  machine.tick(clock.advance(20), restingRadio())
+  expect(machine.tick(clock.advance(LATE_MS), restingRadio()).kind).toBe("frame")
+}
+
+function anUnpluggedPadGivesOneNeutralFrameThenSilence(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock)
+  machine.tick(clock.advance(20), restingRadio())
+  const gone = machine.tick(clock.advance(20), null)
+  expect(gone.kind).toBe("neutral")
+  expect(machine.state).toBe(WAITING)
+  for (let i = 0; i < 10; i++) {
+    expect(machine.tick(clock.advance(20), null).kind).toBe("none")
+    expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("none")
+  }
+  expect(machine.frames).toBe(1)
+}
+
+function aReadThatFailsIsTheSameAsAPadThatIsGone(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock)
+  expect(machine.lost().kind).toBe("neutral")
+  expect(machine.lost().kind).toBe("none")
+  expect(machine.state).toBe(WAITING)
+}
+
+function aReplugRunsTheGateAgainAndDoesNotAskForEnterAgain(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock)
+  machine.tick(clock.advance(20), null)
+  machine.padOpened()
+  expect(machine.state).toBe(GATE)
+  expect(machine.started).toBe(true)
+  for (let i = 0; i < READS; i++) {
+    expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("none")
+  }
+  expect(machine.tick(clock.advance(20), restingRadio()).kind).toBe("frame")
+}
+
+function aPadThatWasLostAtTheGateOrBeforeItOwesNothing(): void {
+  const clock = new Clock()
+  const machine = atTheGate()
+  machine.tick(clock.advance(20), restingRadio())
+  expect(machine.tick(clock.advance(20), null).kind).toBe("none")
+  expect(machine.state).toBe(WAITING)
+  expect(machine.sentAny).toBe(false)
+}
+
+describe("the states", () => {
+  it("send nothing before the pad is open and the go is said", nothingIsSentBeforeThePadIsOpenedAndTheGoIsSaid)
+  it("send nothing at the gate until ten reads in a row are right", nothingIsSentAtTheGateUntilTenReadsInARowAreRight)
+  it("start the count again on a read that is wrong", aReadThatIsWrongStartsTheCountAgain)
+})
+
+describe("the gate", () => {
+  it("names each stick that is off, with its value", eachStickThatIsOffIsNamedWithItsValue)
+  it("lets a stick be 15 % off the middle, and not more", theBandIsFifteenPercentEitherWay)
+  it("wants a throttle that rests low at the bottom, and one that rests in the middle in the middle", aThrottleThatRestsLowMustBeAtTheBottom)
+  it("says which stick is off once a second", theGateSaysWhichStickIsOffOnceASecond)
+  it("never says a small reading as +0.00", aSmallReadingIsNeverSaidAsPlusZero)
+  it("refuses a stick that is on a button or on nothing, naming it", aStickOnAButtonOrNothingIsRefusedByName)
+})
+
+describe("the frames", () => {
+  it("hold the yaw to 80 % while the throttle is at the bottom", theYawIsHeldToEightyPercentWhileTheThrottleIsAtTheBottom)
+  it("do not hold it while the throttle is up", theYawIsNotHeldWhileTheThrottleIsUp)
+  it("do not hold it with --rudder-arm", theRudderArmOptionLiftsTheHold)
+  it("are made of a fresh reading every tick", everyFrameIsMadeOfAFreshReading)
+})
+
+describe("the neutral frame", () => {
+  it("has the sticks in the middle (the throttle by its rest) and every other channel at 0", theNeutralFrameHasTheSticksInTheMiddleAndEverythingElseAtZero)
+  it("follows the channels of the sticks", theNeutralFrameFollowsTheSticksChannels)
+})
+
+describe("a gap or a loss", () => {
+  it("gives one neutral frame for a late tick, and the gate again", aLateTickGivesOneNeutralFrameAndTheGateAgain)
+  it("does not take a tick exactly on the limit for late", aTickExactlyOnTheLimitIsNotLate)
+  it("gives one neutral frame for a pad that went, then silence", anUnpluggedPadGivesOneNeutralFrameThenSilence)
+  it("takes a failed read for a pad that went", aReadThatFailsIsTheSameAsAPadThatIsGone)
+  it("runs the gate again after a replug, without Enter", aReplugRunsTheGateAgainAndDoesNotAskForEnterAgain)
+  it("owes a neutral frame to nobody that was never given one", aPadThatWasLostAtTheGateOrBeforeItOwesNothing)
+})

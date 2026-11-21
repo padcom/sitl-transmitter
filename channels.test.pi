@@ -1,0 +1,121 @@
+// The scaling and the assignment of channels (section 5 of the plan).
+import { describe, it, expect } from "std/test"
+import { FakeSystem, fakeInfo, listPads, openPad } from "padcom/pico-gamepad"
+import { Layout, clamp, emptyFrame, frameOf, pwmOfAxis, pwmOfButton } from "./channels"
+import { axesAt, released, radio } from "./testing"
+
+function text(frame: int[]): string {
+  let out = ""
+  for (let i = 0; i < frame.length; i++) {
+    out += (if (i > 0) "," else "") + `${frame[i]}`
+  }
+  return out
+}
+
+function anAxisIsOneThousandToTwoThousandStraightFromItsValue(): void {
+  expect(`${pwmOfAxis(-1.0)} ${pwmOfAxis(-0.5)} ${pwmOfAxis(0.0)} ${pwmOfAxis(0.5)} ${pwmOfAxis(1.0)}`).toBe("1000 1250 1500 1750 2000")
+}
+
+function aValueOutsideItsRangeIsHeldAndNotANumberIsTheMiddle(): void {
+  expect(`${pwmOfAxis(-3.0)} ${pwmOfAxis(7.5)} ${pwmOfAxis(0.0 / 0.0)}`).toBe("1000 2000 1500")
+  expect(clamp(0.25)).toBe(0.25)
+}
+
+function aButtonIsOneThousandReleasedAndTwoThousandPressed(): void {
+  expect(`${pwmOfButton(false)} ${pwmOfButton(true)}`).toBe("1000 2000")
+}
+
+function aTx16sTakesChannelsOneToEightForItsAxesAndNineToSixteenForItsFirstEightButtons(): void {
+  const layout = radio()
+  expect(layout.channelOfAxis.join(",")).toBe("1,2,3,4,5,6,7,8")
+  expect(layout.channelOfButton.slice(0, 9).join(",")).toBe("9,10,11,12,13,14,15,16,0")
+  expect(`${layout.droppedAxes} ${layout.droppedButtons}`).toBe("0 16")
+}
+
+function theFrameHasTheAxesThenTheButtonsAndTheOtherButtonsAreDropped(): void {
+  const axes = axesAt(8, 0.0)
+  axes[0] = -1.0
+  axes[7] = 1.0
+  const buttons = released(24)
+  buttons[0] = true
+  buttons[7] = true
+  buttons[8] = true
+  buttons[23] = true
+  expect(text(frameOf(radio(), axes, buttons, 4, 1.0))).toBe("1000,1500,1500,1500,1500,1500,1500,2000,2000,1000,1000,1000,1000,1000,1000,2000")
+}
+
+function anOffsetMovesThemUpAndWhatPassesChannelSixteenIsDropped(): void {
+  const layout = radio(2)
+  expect(layout.channelOfAxis.join(",")).toBe("3,4,5,6,7,8,9,10")
+  expect(layout.channelOfButton.slice(0, 7).join(",")).toBe("11,12,13,14,15,16,0")
+  expect(layout.droppedButtons).toBe(18)
+  const frame = frameOf(layout, axesAt(8, 0.0), released(24), 4, 1.0)
+  expect(text(frame)).toBe("0,0,1500,1500,1500,1500,1500,1500,1500,1500,1000,1000,1000,1000,1000,1000")
+}
+
+function aPadWithFourAxesAndTwoButtonsLeavesTheRestAtZero(): void {
+  const layout = new Layout(4, 2, 0)
+  expect(layout.channelOfButton.join(",")).toBe("5,6")
+  const buttons = [true, false]
+  expect(text(frameOf(layout, axesAt(4, 0.0), buttons, 4, 1.0))).toBe("1500,1500,1500,1500,2000,1000,0,0,0,0,0,0,0,0,0,0")
+}
+
+function axesThatDoNotFitAreDroppedToo(): void {
+  const layout = new Layout(10, 0, 8)
+  expect(layout.channelOfAxis.join(",")).toBe("9,10,11,12,13,14,15,16,0,0")
+  expect(layout.droppedAxes).toBe(2)
+}
+
+function theAxisOfAChannelIsFoundOrIsMinusOne(): void {
+  const layout = radio(1)
+  expect(`${layout.axisOf(1)} ${layout.axisOf(2)} ${layout.axisOf(9)} ${layout.axisOf(10)}`).toBe("-1 0 7 -1")
+}
+
+function theYawIsHeldWhenAskedAndNothingElseIs(): void {
+  const axes = axesAt(8, 0.0)
+  axes[3] = 1.0
+  axes[0] = 1.0
+  expect(text(frameOf(radio(), axes, released(24), 4, 0.8)).startsWith("2000,1500,1500,1900,")).toBe(true)
+  axes[3] = -1.0
+  expect(text(frameOf(radio(), axes, released(24), 4, 0.8)).startsWith("2000,1500,1500,1100,")).toBe(true)
+}
+
+function anEmptyFrameIsSixteenZeros(): void {
+  expect(text(emptyFrame())).toBe("0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0")
+}
+
+async function aTx16sThroughTheFakeDeviceGivesTheRangeOfItsRawValues(): Promise<void> throws Error {
+  const path = "/dev/input/event11"
+  const system = new FakeSystem()
+  const device = system.plug(fakeInfo("OpenTX Radiomaster TX16S Joystick", 0x1209, 0x4f54, 8, 24, "00000000001B", "usb-0000:00:03.0-2.1/input0", path))
+  const pad = await openPad((await listPads(system))[0], system)
+  device.set(0, 0)
+  device.set(1, 1023)
+  device.set(2, 2047)
+  device.set(3, 1100)
+  const s = pad.state()
+  // (the kernel's flat, 127, is not applied: raw 1100 is 77 from the middle, inside it, and is still 1537)
+  expect(`${pwmOfAxis(s.axes[0])} ${pwmOfAxis(s.axes[1])} ${pwmOfAxis(s.axes[2])} ${pwmOfAxis(s.axes[3])}`).toBe("1000 1500 2000 1537")
+  pad.close()
+}
+
+describe("the pulse of an axis and of a button", () => {
+  it("is 1000 to 2000 straight from -1 to 1", anAxisIsOneThousandToTwoThousandStraightFromItsValue)
+  it("holds a value outside its range, and takes what is not a number for the middle", aValueOutsideItsRangeIsHeldAndNotANumberIsTheMiddle)
+  it("is 1000 for a button that is released and 2000 for one that is pressed", aButtonIsOneThousandReleasedAndTwoThousandPressed)
+})
+
+describe("the channels of a pad", () => {
+  it("are CH1..CH8 for the axes of a TX16S and CH9..CH16 for its first buttons", aTx16sTakesChannelsOneToEightForItsAxesAndNineToSixteenForItsFirstEightButtons)
+  it("make a frame of the axes, then the buttons, and drop the buttons that do not fit", theFrameHasTheAxesThenTheButtonsAndTheOtherButtonsAreDropped)
+  it("go up with an offset, and what passes channel 16 is dropped", anOffsetMovesThemUpAndWhatPassesChannelSixteenIsDropped)
+  it("leave the channels of a pad that has fewer at 0 (ignore)", aPadWithFourAxesAndTwoButtonsLeavesTheRestAtZero)
+  it("drop axes that do not fit too", axesThatDoNotFitAreDroppedToo)
+  it("name the axis that drives a channel, or -1", theAxisOfAChannelIsFoundOrIsMinusOne)
+  it("hold the yaw to a limit when asked, and nothing else", theYawIsHeldWhenAskedAndNothingElseIs)
+  it("are 16 zeros in an empty frame", anEmptyFrameIsSixteenZeros)
+})
+
+describe("the range of a real radio", () => {
+  it("goes from raw 0 to 1000, the middle to 1500, raw 2047 to 2000, with no dead zone", aTx16sThroughTheFakeDeviceGivesTheRangeOfItsRawValues)
+})
