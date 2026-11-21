@@ -47,6 +47,15 @@ After any loss (a pad that was unplugged, or a tick that came too late: more tha
 in the middle, the throttle in the middle or at the bottom by its rest, every other channel 0 = untouched) and the gate runs again. A
 pad that comes back is found again by **its own id** (never another pad), and Enter is not asked again.
 
+### When nothing moves
+
+The once-a-second status line says what the program waits for: `ready: nothing is sent until you press Enter (or start with --go)`,
+or `gate: waiting for rest, 3/10 reads right (throttle is not in the middle: -1.00)` (a throttle that rests at the bottom wants
+`--throttle-rest low`), each with the four sticks' live values, and `no packet is sent yet` until the gate has passed. `--verbose` adds
+`packets: N sent, the last one CH1..CH8 ...` (or `none yet (<state>)`) once a second, even with `--quiet`. If packets are sent and
+SITL does not react, look at SITL: the port (`-I n` gives 5501 + 10 n unless `--rc-in-port` says otherwise), `SIM_RC_FAIL` (not 0 ignores
+the input) and `RC_PROTOCOLS`; SITL prints "Malformed SITL RC input" on its console for a packet that is not 16 or 32 bytes.
+
 ### The channels
 
 Pad axis *i* goes to RC channel *i* + 1 + `--offset`, then the buttons to the channels after them, while there are channels left (up to
@@ -123,6 +132,7 @@ that it has RC input (or watch the channels in the app's Setup > Radio).
 --fake-pad <file>           read the pad from a script instead of a device
 --exit-after <s>            end after s seconds
 --quiet                     no status line
+--verbose                   once a second, the first 8 channels of the last packet and how many were sent
 ```
 
 Exit codes: 0 normal end; 2 usage error; 3 no pad or no access to it; 4 the start was refused (no terminal and no `--go`, or a stick

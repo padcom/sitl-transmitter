@@ -3,7 +3,7 @@
 // as a `Sink` and the keyboard only as a `Control`, so the tests run it all without a device, a socket or a sleep.
 import { Layout } from "./channels"
 import { Options } from "./cli"
-import { Config, Machine, WAITING, lateFor } from "./gate"
+import { Config, GATE, Machine, READS, READY, WAITING, lateFor, sticksText } from "./gate"
 import { Sink } from "./sender"
 import { Source } from "./source"
 
@@ -37,6 +37,24 @@ function channels(frame: int[]): string {
     out += (if (i > 0) " " else "") + `${if (i < frame.length) frame[i] else 0}`
   }
   return out
+}
+
+/// The once-a-second line: the state in words (what it waits for, and what blocks it), the sticks as they read now, the packets, and where
+/// they go.
+function statusLine(machine: Machine, name: string, sticks: string, last: int[], destination: string): string {
+  const target = `sending to ${destination}: for ArduPilot SITL only`
+  const seen = if (sticks == "") "" else `, sticks ${sticks}`
+  if (machine.state == WAITING) {
+    return `${machine.state}: ${name} is not there, nothing is sent; ${target}`
+  }
+  if (machine.state == READY) {
+    return `${machine.state}: nothing is sent until you press Enter (or start with --go)${seen}; ${target}`
+  }
+  if (machine.state == GATE) {
+    const blocked = if (machine.off == "") "the sticks are right" else machine.off
+    return `${machine.state}: waiting for rest, ${machine.good}/${READS} reads right (${blocked})${seen}; no packet is sent yet; ${target}`
+  }
+  return `${machine.state}: ${name}, ${machine.frames} packets, CH1..CH8 ${channels(last)}${seen}, ${target}`
 }
 
 /// The exit code for a pad that could not be opened, and what to tell the person.
@@ -104,6 +122,7 @@ export async function run(options: Options, source: Source, sink: Sink, clock: T
   let nextStatus = begin + 1000
   let nextOpen = begin
   let last: int[] = []
+  let sticks = ""
   let result = 0
   while (!control.quit && (limit < 0 || clock.now() < limit)) {
     const now = clock.now()
@@ -120,7 +139,11 @@ export async function run(options: Options, source: Source, sink: Sink, clock: T
         }
       }
     } else {
-      const step = machine.tick(now, source.read(now))
+      const reading = source.read(now)
+      if (reading != null) {
+        sticks = sticksText(machine.config, reading!.axes)
+      }
+      const step = machine.tick(now, reading)
       if (step.message != "") {
         out.line(step.message)
       }
@@ -142,9 +165,14 @@ export async function run(options: Options, source: Source, sink: Sink, clock: T
         }
       }
     }
-    if (!options.quiet && now >= nextStatus) {
+    if (now >= nextStatus) {
       nextStatus = now + 1000
-      out.line(`${machine.state}: ${source.name()}, ${machine.frames} packets, CH1..CH8 ${channels(last)}, sending to ${destination}: for ArduPilot SITL only`)
+      if (!options.quiet) {
+        out.line(statusLine(machine, source.name(), sticks, last, destination))
+      }
+      if (options.verbose) {
+        out.line(`packets: ${machine.frames} sent, ${if (machine.frames > 0) "the last one CH1..CH8 " + channels(last) else "none yet (" + machine.state + ")"}`)
+      }
     }
     next += period
     const waiting = next - clock.now()

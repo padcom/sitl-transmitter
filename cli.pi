@@ -20,6 +20,7 @@ Reads one gamepad or radio and sends its channels, as a receiver would, to ArduP
   --fake-pad <file>           read the pad from a script (JSON Lines) instead of a device
   --exit-after <s>            end (after the neutral frame) after s seconds
   --quiet                     no status line
+  --verbose                   once a second, the first 8 channels of the last packet and how many were sent
   --version, --help
 
 Ends with q + Enter (or Ctrl-C where the platform lets it). Exit codes: 0 normal end, 2 usage error, 3 no pad or no access to it,
@@ -45,6 +46,7 @@ export class Options {
   /// Seconds to run, or -1 for no limit.
   public exitAfter: int = -1
   public quiet: bool = false
+  public verbose: bool = false
 
   /// The UDP port: the explicit one, else 5501 + 10 for each instance.
   public portOf(): int {
@@ -134,7 +136,7 @@ function hasDuplicates(values: int[]): bool {
 
 /// The flags that take a value, and the ones that do not.
 const WITH_VALUE = ["--pad", "--instance", "--port", "--host", "--rate", "--offset", "--sticks", "--throttle-rest", "--fake-pad", "--exit-after"]
-const WITHOUT_VALUE = ["--list", "--rudder-arm", "--go", "--quiet", "--version", "--help"]
+const WITHOUT_VALUE = ["--list", "--rudder-arm", "--go", "--quiet", "--verbose", "--version", "--help"]
 
 /// Applies one flag to the options; "" when it is fine, else the usage error.
 function apply(options: Options, flag: string, value: string): string {
@@ -219,6 +221,8 @@ export function parse(args: string[], interactive: bool): Parsed {
         options.go = true
       } else if (flag == "--quiet") {
         options.quiet = true
+      } else if (flag == "--verbose") {
+        options.verbose = true
       } else if (flag == "--version") {
         action = "version"
       } else {

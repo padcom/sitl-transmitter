@@ -260,7 +260,55 @@ async function atTheSlowestRateALateTickIsNotAStall(): Promise<void> throws Erro
   expect(r.said.has("the pad stalled or went")).toBe(false)
 }
 
+async function theStatusLineSaysWhatTheRunWaitsForAndWhatBlocksIt(): Promise<void> throws Error {
+  // (a throttle that rests at the bottom, asked to rest in the middle: the gate never passes, and the status line must say so)
+  const stuck = new Run()
+  const options = goOptions(3)
+  options.quiet = false
+  await stuck.go(options, sourceOf(`{"t": 0, "axes": [0, 0, -1.0, 0, 0, 0, 0, 0], "buttons": [0, 0, 0, 0, 0, 0, 0, 0]}`))
+  expect(stuck.sink.frames.length).toBe(0)
+  expect(stuck.said.has("gate: waiting for rest, 0/10 reads right (throttle is not in the middle: -1.00), sticks roll +0.00 pitch +0.00 throttle -1.00 yaw +0.00; no packet is sent yet; sending to 127.0.0.1:5501: for ArduPilot SITL only")).toBe(true)
+  // (without Enter: it says that is what it waits for)
+  const ready = new Run()
+  const asking = goOptions(2)
+  asking.go = false
+  asking.quiet = false
+  await ready.go(asking, sourceOf(REST))
+  expect(ready.said.has("ready: nothing is sent until you press Enter (or start with --go), sticks roll +0.00 pitch +0.00 throttle +0.00 yaw +0.00; sending to 127.0.0.1:5501: for ArduPilot SITL only")).toBe(true)
+}
+
+async function verbosePrintsTheFirstEightChannelsOfTheLastPacketOnceASecond(): Promise<void> throws Error {
+  const r = new Run()
+  const options = goOptions(4)
+  options.verbose = true
+  await r.go(options, sourceOf(REST))
+  let verbose = 0
+  let last = ""
+  for (const s of r.said.said) {
+    if (s.startsWith("packets: ")) {
+      verbose += 1
+      last = s
+    }
+  }
+  expect(verbose).toBe(3)
+  expect(last.includes("sent, the last one CH1..CH8 1500 1500 1500 1500 1500 1500 1500 1500")).toBe(true)
+  // (at a gate that never passes, it says that nothing was sent)
+  const stuck = new Run()
+  const blocked = goOptions(2)
+  blocked.verbose = true
+  await stuck.go(blocked, sourceOf(`{"t": 0, "axes": [0.9, 0, 0, 0, 0, 0, 0, 0], "buttons": [0, 0, 0, 0, 0, 0, 0, 0]}`))
+  expect(stuck.said.has("packets: 0 sent, none yet (gate)")).toBe(true)
+  // (without --verbose there is none; --quiet silences the status line but not --verbose)
+  const quiet = new Run()
+  await quiet.go(goOptions(3), sourceOf(REST))
+  for (const s of quiet.said.said) {
+    expect(s.startsWith("packets: ")).toBe(false)
+  }
+}
+
 describe("a run", () => {
+  it("says in the status line what it waits for and what blocks the gate", theStatusLineSaysWhatTheRunWaitsForAndWhatBlocksIt)
+  it("prints the first 8 channels of the last packet once a second with --verbose", verbosePrintsTheFirstEightChannelsOfTheLastPacketOnceASecond)
   it("does not take a tick that is late at --rate 10 for a stall", atTheSlowestRateALateTickIsNotAStall)
   it("sends frames at the rate after the gate, and the neutral frame twice at the end", aRunSendsFramesAtTheRateAfterTheGateAndTheNeutralFrameTwiceAtTheEnd)
   it("sends nothing while a stick is off, and the gate says which", nothingIsSentWhileAStickIsOffAndTheGateSaysWhich)
