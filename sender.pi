@@ -1,0 +1,118 @@
+// The UDP side (section 7 of the plan): the destination is `--host` (127.0.0.1 unless the person names another: SITL in a VM), resolved
+// ONCE at start to an IPv4 address that is not a broadcast, a multicast or the "any" address; the socket is a plain UDP socket, and the
+// only thing ever sent is a packet of the RC input's format (32 bytes). Nothing is sent to a host the person did not name.
+import { bind, resolve } from "std/net"
+import { UdpSocket } from "std/net"
+import { addressProblem } from "./cli"
+import { packetOf } from "./packet"
+
+/// Where frames go: the real socket, or a test's recorder.
+export interface Sink {
+  send(frame: int[]): Promise<void, Error>
+  close(): void
+}
+
+/// The IPv4 address `host` stands for, or why not.
+export class Resolved {
+  public address: string = ""
+  public problem: string = ""
+  /// The exit code of the problem: 5 (not resolved), 2 for an address that is refused (a broadcast, a multicast).
+  public code: int = 0
+}
+
+/// An IPv4 literal ("a.b.c.d"): four numbers, each 0..255.
+function isIpv4(text: string): bool {
+  const parts = text.split(".")
+  if (parts.length != 4) {
+    return false
+  }
+  for (const part of parts) {
+    if (part.length == 0 || part.length > 3) {
+      return false
+    }
+    for (let i = 0; i < part.length; i++) {
+      if ("0123456789".indexOf(part.slice(i, i + 1)) < 0) {
+        return false
+      }
+    }
+    if ((parseInt(part) as int) > 255) {
+      return false
+    }
+  }
+  return true
+}
+
+/// Resolves the host once: a literal is taken as it is, a name is asked of the system (the first IPv4 address). A host that cannot be
+/// resolved, has no IPv4 address, or is a broadcast/multicast address is a problem (exit 5, or 2 for the last).
+export async function resolveHost(host: string): Promise<Resolved> {
+  const out = new Resolved()
+  if (isIpv4(host)) {
+    out.address = host
+  } else {
+    try {
+      const found = await resolve(host)
+      for (const address of found) {
+        if (out.address == "" && isIpv4(address)) {
+          out.address = address
+        }
+      }
+    } catch (e: Error) {
+      out.problem = `the host ${host} could not be resolved: ${e.message}`
+      out.code = 5
+      return out
+    }
+    if (out.address == "") {
+      out.problem = `the host ${host} has no IPv4 address`
+      out.code = 5
+      return out
+    }
+  }
+  const bad = addressProblem(out.address)
+  if (bad != "") {
+    out.address = ""
+    out.problem = `the host ${host} is ${bad}`
+    out.code = 2
+  }
+  return out
+}
+
+/// The datagrams to SITL: one packet for each frame, to `address:port`.
+export class UdpSink implements Sink {
+  public readonly socket: UdpSocket
+  public readonly address: string
+  public readonly port: int
+  public sent: int = 0
+
+  constructor(socket: UdpSocket, address: string, port: int) {
+    this.socket = socket
+    this.address = address
+    this.port = port
+  }
+
+  public async send(frame: int[]): Promise<void> throws Error {
+    await socket.send(packetOf(frame), port, address)
+    sent += 1
+  }
+
+  public close(): void {
+    socket.close()
+  }
+}
+
+/// The socket for `address:port`, bound to an address of the system's choosing (the one a packet to `address` leaves by), or null with
+/// the reason in `problem`.
+export class Made {
+  public sink: UdpSink? = null
+  public problem: string = ""
+}
+
+export async function makeSink(address: string, port: int): Promise<Made> {
+  const made = new Made()
+  try {
+    const socket = await bind(0, "0.0.0.0")
+    made.sink = new UdpSink(socket, address, port)
+  } catch (e: Error) {
+    made.problem = `the UDP socket could not be made: ${e.message}`
+  }
+  return made
+}

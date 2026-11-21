@@ -1,0 +1,58 @@
+// Ending on Ctrl-C and `kill` without losing the neutral frame, and knowing whether stdin is a terminal (Linux). Pico's standard library
+// cannot catch a signal (the runtime's default action ends the process at once, and SITL would keep the last sticks), so the signals
+// are BLOCKED and polled: `sigprocmask` holds SIGINT, SIGTERM and SIGHUP back, and `sigpending` says each tick whether one came. No
+// callback is needed. A signal blocked in this thread is delivered to no other thread of the process only if the runtime's own threads
+// blocked it too: `block` is called first thing in `main`, before anything starts them (threads inherit the mask of the thread that
+// makes them), and `signals.linux.test.pi` sends this very process a SIGTERM and sees it survive and become pending.
+export extern "C" {
+  function isatty(fd: c_int): c_int
+  function sigemptyset(set: usize): c_int
+  function sigaddset(set: usize, signum: c_int): c_int
+  function sigprocmask(how: c_int, set: usize, old: usize): c_int
+  function sigpending(set: usize): c_int
+  function sigismember(set: usize, signum: c_int): c_int
+  function kill(pid: c_int, signum: c_int): c_int
+  function getpid(): c_int
+}
+
+const SIG_BLOCK: int = 0
+export const SIGHUP: int = 1
+export const SIGINT: int = 2
+export const SIGTERM: int = 15
+/// A `sigset_t` is 128 bytes in glibc and musl; a larger buffer is harmless.
+const SET_BYTES: int = 256
+
+function addr(b: Uint8Array): usize {
+  return (b.buffer.__handle + b.byteOffset) as usize
+}
+
+/// Whether stdin is a terminal (a person can press Enter).
+export function isTerminal(): bool {
+  return isatty(0 as c_int) == 1
+}
+
+/// Holds SIGINT, SIGTERM and SIGHUP back for the whole life of this thread (and every thread made after it). True when it worked.
+export function block(): bool {
+  const set = new Uint8Array(SET_BYTES)
+  if (sigemptyset(addr(set)) != 0) {
+    return false
+  }
+  sigaddset(addr(set), SIGINT as c_int)
+  sigaddset(addr(set), SIGTERM as c_int)
+  sigaddset(addr(set), SIGHUP as c_int)
+  return sigprocmask(SIG_BLOCK as c_int, addr(set), 0 as usize) == 0
+}
+
+/// Whether a signal of one of the three came since `block`: the person pressed Ctrl-C, or something said `kill`.
+export function terminated(): bool {
+  const set = new Uint8Array(SET_BYTES)
+  if (sigemptyset(addr(set)) != 0 || sigpending(addr(set)) != 0) {
+    return false
+  }
+  return sigismember(addr(set), SIGINT as c_int) == 1 || sigismember(addr(set), SIGTERM as c_int) == 1 || sigismember(addr(set), SIGHUP as c_int) == 1
+}
+
+/// Sends this process a signal (for the test of `block`).
+export function signalSelf(signum: int): bool {
+  return kill(getpid(), signum as c_int) == 0
+}

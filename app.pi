@@ -1,0 +1,109 @@
+// What the program does, from the arguments to the exit code, with everything it touches handed in (the pad system, the time, the places
+// that say things, the control): `main.pi` only hands in the real ones. Exit codes: 0 normal end, 2 usage error, 3 no pad or no access,
+// 4 the start was refused, 5 the UDP socket or the host.
+import { PadSystem, defaultSystem, listPads } from "padcom/pico-gamepad"
+import { USAGE, parse } from "./cli"
+import { DeviceSource, listLine, pickPad } from "./devicesource"
+import { FakeSource, readScript } from "./fakepad"
+import { Control, Out, Time, run } from "./runner"
+import { makeSink, resolveHost } from "./sender"
+import { Source } from "./source"
+import { versionLine } from "./version"
+import { readText } from "std/fs"
+
+/// A line for each pad of the system, or the hint when there are none.
+async function list(system: PadSystem, out: Out): Promise<void> throws Error {
+  const pads = await listPads(system)
+  if (pads.length == 0) {
+    out.line("no gamepad found (a radio shows up when it is plugged in; on Linux the desktop gives you access to it)")
+  }
+  for (let i = 0; i < pads.length; i++) {
+    out.line(listLine(i, pads[i]))
+  }
+}
+
+/// The source the options ask for, or an exit code (and the reason said): a script of `--fake-pad`, or a real pad chosen from the list.
+class Chosen {
+  public source: Source? = null
+  public code: int = 0
+}
+
+async function choose(padText: string, fakePad: string, system: PadSystem, err: Out, out: Out): Promise<Chosen> throws Error {
+  const chosen = new Chosen()
+  if (fakePad != "") {
+    let text = ""
+    try {
+      text = await readText(fakePad)
+    } catch (e: Error) {
+      err.line(`--fake-pad: ${fakePad} could not be read: ${e.message}`)
+      chosen.code = 2
+      return chosen
+    }
+    const script = readScript(text)
+    if (script.problem != "") {
+      err.line(`--fake-pad ${fakePad}: ${script.problem}`)
+      chosen.code = 2
+      return chosen
+    }
+    chosen.source = new FakeSource(script)
+    return chosen
+  }
+  const pads = await listPads(system)
+  const pick = pickPad(pads, padText)
+  if (pick.problem != "") {
+    err.line(pick.problem)
+    if (pick.code == 2) {
+      for (let i = 0; i < pads.length; i++) {
+        out.line(listLine(i, pads[i]))
+      }
+    }
+    chosen.code = pick.code
+    return chosen
+  }
+  chosen.source = new DeviceSource(pads[pick.index], system)
+  return chosen
+}
+
+/// Runs the program. `interactive` is whether stdin is a terminal; `control` is what the keyboard and the signals set while it runs.
+export async function execute(args: string[], interactive: bool, out: Out, err: Out, time: Time, control: Control, system: PadSystem = defaultSystem()): Promise<int> throws Error {
+  const parsed = parse(args, interactive)
+  if (parsed.action == "error") {
+    err.line(parsed.message)
+    if (parsed.code == 2) {
+      err.line(USAGE)
+    }
+    return parsed.code
+  }
+  if (parsed.action == "help") {
+    out.line(USAGE)
+    return 0
+  }
+  if (parsed.action == "version") {
+    out.line(versionLine())
+    return 0
+  }
+  if (parsed.action == "list") {
+    await list(system, out)
+    return 0
+  }
+  const options = parsed.options
+  const chosen = await choose(options.pad, options.fakePad, system, err, out)
+  if (chosen.source == null) {
+    return chosen.code
+  }
+  const resolved = await resolveHost(options.host)
+  if (resolved.problem != "") {
+    err.line(resolved.problem)
+    return resolved.code
+  }
+  const made = await makeSink(resolved.address, options.portOf())
+  if (made.sink == null) {
+    err.line(made.problem)
+    return 5
+  }
+  const sink = made.sink!
+  const shown = if (resolved.address == options.host) options.host else `${options.host} (${resolved.address})`
+  const code = await run(options, chosen.source!, sink, time, out, control, `${shown}:${options.portOf()}`)
+  sink.close()
+  return code
+}

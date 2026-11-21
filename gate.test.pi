@@ -140,6 +140,25 @@ function aStickOnAButtonOrNothingIsRefusedByName(): void {
   expect(atTheGate().problem()).toBe("")
 }
 
+function aReadingThatIsShorterThanTheLayoutIsOffTheMiddleNotZero(): void {
+  const clock = new Clock()
+  const machine = atTheGate()
+  const short = new Reading([0.0, 0.0], released(24))
+  expect(machine.tick(clock.advance(2000), short).message).toBe("throttle is missing from the reading (the pad reports 2 axes)")
+  for (let i = 0; i < 30; i++) {
+    machine.tick(clock.advance(20), short)
+  }
+  expect(`${machine.state} ${machine.good} ${machine.frames}`).toBe("gate 0 0")
+}
+
+function aReadingThatLosesAnAxisWhileSendingIsAGap(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock)
+  const step = machine.tick(clock.advance(20), new Reading([0.0, 0.0, 0.0], released(24)))
+  expect(step.kind).toBe("neutral")
+  expect(machine.state).toBe(GATE)
+}
+
 // ---- the frames ----
 
 function theYawIsHeldToEightyPercentWhileTheThrottleIsAtTheBottom(): void {
@@ -265,6 +284,8 @@ describe("the gate", () => {
   it("says which stick is off once a second", theGateSaysWhichStickIsOffOnceASecond)
   it("never says a small reading as +0.00", aSmallReadingIsNeverSaidAsPlusZero)
   it("refuses a stick that is on a button or on nothing, naming it", aStickOnAButtonOrNothingIsRefusedByName)
+  it("takes a reading shorter than the layout for off the middle, never for 0.0", aReadingThatIsShorterThanTheLayoutIsOffTheMiddleNotZero)
+  it("takes an axis lost while sending for a gap: neutral, and the gate again", aReadingThatLosesAnAxisWhileSendingIsAGap)
 })
 
 describe("the frames", () => {

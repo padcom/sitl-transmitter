@@ -1,6 +1,9 @@
-// Helpers for the tests: a clock the test moves, a TX16S-shaped layout and readings at rest.
+// Helpers for the tests: a clock the test moves, a TX16S-shaped layout, readings at rest, and the fakes the runner is run with (time that
+// waits by moving, a sink that records frames, a place that collects what is said).
 import { Layout } from "./channels"
 import { Config, Machine, Reading } from "./gate"
+import { Control, Out, Time } from "./runner"
+import { Sink } from "./sender"
 
 /// A clock in ms that only a test moves.
 export class Clock {
@@ -10,6 +13,77 @@ export class Clock {
     now += ms
     return now
   }
+}
+
+/// Time for the runner: `wait` only moves the clock, so a run of seconds takes no time. `at(ms, action)` lets a test act at a moment
+/// (press Enter, unplug, quit): the action runs, once, in the first wait that reaches that time.
+export class FakeTime implements Time {
+  public ms: int = 0
+  public waits: int = 0
+  public whens: int[] = []
+  public actions: (() => void)[] = []
+
+  public at(when: int, action: () => void): void {
+    whens.push(when)
+    actions.push(action)
+  }
+
+  public now(): int {
+    return ms
+  }
+
+  public async wait(delay: int): Promise<void> throws Error {
+    ms += delay
+    waits += 1
+    for (let i = 0; i < whens.length; i++) {
+      if (whens[i] >= 0 && whens[i] <= ms) {
+        whens[i] = -1
+        actions[i]()
+      }
+    }
+  }
+}
+
+/// A sink that records what it was given (and can be made to fail).
+export class Recorder implements Sink {
+  public frames: int[][] = []
+  public at: int[] = []
+  public broken: bool = false
+  public time: FakeTime? = null
+
+  public async send(frame: int[]): Promise<void> throws Error {
+    if (broken) {
+      throw new Error("network is unreachable")
+    }
+    frames.push(frame)
+    const t = time
+    at.push(if (t != null) t!.now() else 0)
+  }
+
+  public close(): void {}
+}
+
+/// What was said, in order.
+export class Lines implements Out {
+  public said: string[] = []
+
+  public line(text: string): void {
+    said.push(text)
+  }
+
+  public has(part: string): bool {
+    for (const s of said) {
+      if (s.includes(part)) {
+        return true
+      }
+    }
+    return false
+  }
+}
+
+/// A control with nothing said.
+export function quiet(): Control {
+  return new Control()
 }
 
 /// A TX16S: 8 axes and 24 buttons (CH1..CH8 axes, CH9..CH16 buttons 0..7, the other buttons dropped).

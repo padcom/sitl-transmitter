@@ -1,0 +1,160 @@
+// The whole program in one process: the arguments to the exit code, with a pad script, the real UDP socket and a receiver of our own on
+// the loopback address (what SITL would be), and the real clock. Plus every way it refuses before it sends.
+import { describe, it, expect } from "std/test"
+import { writeText, remove } from "std/fs"
+import { UdpSocket, bind } from "std/net"
+import { delay } from "std/timers"
+import { FakeSystem, fakeInfo } from "padcom/pico-gamepad"
+import { execute } from "./app"
+import { frameOfPacket } from "./packet"
+import { Control, Time } from "./runner"
+import { Lines } from "./testing"
+
+class Real implements Time {
+  public base: int = 0
+
+  public now(): int {
+    return (Date.now() as int) - base
+  }
+
+  public async wait(ms: int): Promise<void> throws Error {
+    await delay(ms)
+  }
+}
+
+const SCRIPT = "target-test-pad.jsonl"
+const REST = `{"t": 0, "axes": [0, 0, 0, 0, 0, 0, 0, 0], "buttons": [0, 0, 0, 0, 0, 0, 0, 0]}\n{"t": 600, "axes": [1.0]}`
+
+function radio(): FakeSystem {
+  const system = new FakeSystem()
+  system.plug(fakeInfo("OpenTX Radiomaster TX16S Joystick", 0x1209, 0x4f54, 8, 24, "00000000001B", "usb-0000:00:03.0-2.1/input0", "/dev/input/event11"))
+  return system
+}
+
+async function exec(args: string[], interactive: bool, system: FakeSystem = radio()): Promise<Result> throws Error {
+  const result = new Result()
+  result.code = await execute(args, interactive, result.out, result.err, new Real(), new Control(), system)
+  return result
+}
+
+/// What SITL would be: collects the datagrams that arrive, and how many bytes they were.
+class Catcher {
+  public got: int[][] = []
+  public sizes: int = 0
+
+  public async listen(receiver: UdpSocket): Promise<void> {
+    try {
+      while (true) {
+        const datagram = await receiver.receive()
+        if (datagram == null) {
+          return
+        }
+        sizes += datagram!.data.length
+        got.push(frameOfPacket(datagram!.data))
+      }
+    } catch (e: Error) {
+      // (the socket was closed under the read: the end)
+    }
+  }
+}
+
+class Result {
+  public code: int = -1
+  public out: Lines = new Lines()
+  public err: Lines = new Lines()
+}
+
+async function aRunSendsRealDatagramsToTheReceiverAndEndsWithTheNeutralFrameTwice(): Promise<void> throws Error {
+  await writeText(SCRIPT, REST)
+  const receiver = await bind(0, "127.0.0.1")
+  const port = receiver.addr.port
+  const catcher = new Catcher()
+  catcher.listen(receiver)
+  const r = await exec(["--fake-pad", SCRIPT, "--go", "--quiet", "--port", `${port}`, "--exit-after", "2"], false)
+  await delay(100)
+  receiver.close()
+  await remove(SCRIPT)
+  expect(r.code).toBe(0)
+  const got = catcher.got
+  const n = got.length
+  expect(n > 30).toBe(true)
+  expect(catcher.sizes).toBe(32 * n)
+  // (the first frames: every axis in the middle, the buttons released; later the roll goes to 2000)
+  expect(`${got[0][0]} ${got[0][8]} ${got[n - 3][0]}`).toBe("1500 1000 2000")
+  expect(`${got[n - 1][0]} ${got[n - 1][3]} ${got[n - 1][4]} ${got[n - 2][2]}`).toBe("1500 1500 0 1500")
+}
+
+async function helpAndVersionAndTheListAreExitZero(): Promise<void> throws Error {
+  const help = await exec(["--help"], true)
+  expect(help.code).toBe(0)
+  expect(help.out.has("usage: sitl-transmitter")).toBe(true)
+  const version = await exec(["--version"], false)
+  expect(`${version.code} ${version.out.said[0]}`).toBe("0 sitl-transmitter 0.0.1")
+  const list = await exec(["--list"], false)
+  expect(list.code).toBe(0)
+  expect(list.out.said[0]).toBe("0: OpenTX Radiomaster TX16S Joystick  id 1209:4f54#00000000001B  /dev/input/event11  8 axes, 24 buttons")
+  const none = await exec(["--list"], false, new FakeSystem())
+  expect(`${none.code} ${none.out.has("no gamepad found")}`).toBe("0 true")
+}
+
+async function aUsageErrorIsCodeTwoWithTheUsage(): Promise<void> throws Error {
+  const r = await exec(["--rate", "5"], true)
+  expect(r.code).toBe(2)
+  expect(r.err.has("--rate wants a whole number from 10 to 100, not 5")).toBe(true)
+  expect(r.err.has("usage: sitl-transmitter")).toBe(true)
+}
+
+async function withoutATerminalAndWithoutGoTheStartIsRefused(): Promise<void> throws Error {
+  const r = await exec(["--pad", "1209:4f54"], false)
+  expect(r.code).toBe(4)
+  expect(r.err.has("Start it with --go")).toBe(true)
+}
+
+async function noPadIsCodeThreeAndSeveralPadsWithoutPadIsCodeTwoWithTheList(): Promise<void> throws Error {
+  const none = await exec(["--go"], false, new FakeSystem())
+  expect(none.code).toBe(3)
+  const two = radio()
+  two.plug(fakeInfo("Other pad", 0x045e, 0x028e, 4, 8, "", "usb-0000:00:03.0-2.2/input0", "/dev/input/event12"))
+  const many = await exec(["--go"], false, two)
+  expect(many.code).toBe(2)
+  expect(many.out.said.length).toBe(2)
+  const no = await exec(["--go", "--pad", "nothing like that"], false)
+  expect(no.code).toBe(2)
+  expect(no.err.has("no pad matches nothing like that")).toBe(true)
+}
+
+async function aHostThatCannotBeResolvedIsCodeFiveWithAClearMessage(): Promise<void> throws Error {
+  await writeText(SCRIPT, REST)
+  const r = await exec(["--fake-pad", SCRIPT, "--go", "--host", "no-such-host.invalid"], false)
+  await remove(SCRIPT)
+  expect(r.code).toBe(5)
+  expect(r.err.has("the host no-such-host.invalid could not be resolved")).toBe(true)
+}
+
+async function aBroadcastOrMulticastHostIsRefusedAtTheCommandLine(): Promise<void> throws Error {
+  const a = await exec(["--go", "--host", "255.255.255.255"], false)
+  expect(`${a.code} ${a.err.has("the broadcast address")}`).toBe("2 true")
+  const b = await exec(["--go", "--host", "224.0.0.1"], false)
+  expect(`${b.code} ${b.err.has("a multicast address")}`).toBe("2 true")
+}
+
+async function aFakePadThatIsMissingOrWrongIsCodeTwo(): Promise<void> throws Error {
+  const missing = await exec(["--go", "--fake-pad", "no-such-file.jsonl"], false)
+  expect(missing.code).toBe(2)
+  await writeText(SCRIPT, "{not json")
+  const wrong = await exec(["--go", "--fake-pad", SCRIPT], false)
+  await remove(SCRIPT)
+  expect(wrong.code).toBe(2)
+  expect(wrong.err.has("line 1")).toBe(true)
+}
+
+describe("the program", () => {
+  it("sends real datagrams to a receiver and ends with the neutral frame twice", aRunSendsRealDatagramsToTheReceiverAndEndsWithTheNeutralFrameTwice)
+  it("answers --help, --version and --list with 0", helpAndVersionAndTheListAreExitZero)
+  it("exits 2 with the usage on a usage error", aUsageErrorIsCodeTwoWithTheUsage)
+  it("refuses to start with no terminal and no --go (4)", withoutATerminalAndWithoutGoTheStartIsRefused)
+  it("exits 3 with no pad, and 2 with several pads or none that matches", noPadIsCodeThreeAndSeveralPadsWithoutPadIsCodeTwoWithTheList)
+  it("exits 5 with a clear message for a host that cannot be resolved", aHostThatCannotBeResolvedIsCodeFiveWithAClearMessage)
+  it("refuses a broadcast or multicast host (2)", aBroadcastOrMulticastHostIsRefusedAtTheCommandLine)
+  it("exits 2 for a fake pad file that is missing or wrong", aFakePadThatIsMissingOrWrongIsCodeTwo)
+})

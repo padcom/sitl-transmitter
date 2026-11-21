@@ -1,0 +1,138 @@
+// Every flag and its default, the ranges, the precedence of --port over --instance, --host, and the exit codes (2 and 4).
+import { describe, it, expect } from "std/test"
+import { USAGE, addressProblem, digits, parse } from "./cli"
+
+function ok(args: string[]): string {
+  const p = parse(args, true)
+  return `${p.action} ${p.code}`
+}
+
+function errorOf(args: string[], interactive: bool = true): string {
+  const p = parse(args, interactive)
+  return `${p.action} ${p.code}: ${p.message}`
+}
+
+function theDefaultsAreThoseOfThePlan(): void {
+  const p = parse([], true)
+  const o = p.options
+  expect(`${p.action} ${p.code}`).toBe("run 0")
+  expect(`${o.pad}|${o.instance}|${o.port}|${o.portOf()}|${o.host}|${o.rate}|${o.offset}|${o.sticks.join(",")}|${o.throttleLow}|${o.rudderArm}|${o.go}|${o.fakePad}|${o.exitAfter}|${o.quiet}|${o.list}`).toBe(
+    "|0|-1|5501|127.0.0.1|50|0|1,2,3,4|false|false|false||-1|false|false",
+  )
+}
+
+function everyFlagIsRead(): void {
+  const p = parse(["--pad", "1209:4f54", "--instance", "2", "--host", "192.168.1.20", "--rate", "25", "--offset", "3", "--sticks", "2,1,4,3", "--throttle-rest", "low", "--rudder-arm", "--go", "--fake-pad", "x.jsonl", "--exit-after", "30", "--quiet"], false)
+  const o = p.options
+  expect(`${p.action} ${p.code}`).toBe("run 0")
+  expect(`${o.pad}|${o.instance}|${o.portOf()}|${o.host}|${o.rate}|${o.offset}|${o.sticks.join(",")}|${o.throttleLow}|${o.rudderArm}|${o.go}|${o.fakePad}|${o.exitAfter}|${o.quiet}`).toBe(
+    "1209:4f54|2|5521|192.168.1.20|25|3|2,1,4,3|true|true|true|x.jsonl|30|true",
+  )
+}
+
+function theFlagMayBeWrittenWithAnEqualsSign(): void {
+  const o = parse(["--rate=40", "--host=localhost", "--sticks=1,2,3,4"], true).options
+  expect(`${o.rate} ${o.host}`).toBe("40 localhost")
+}
+
+function anExplicitPortWinsOverTheInstance(): void {
+  expect(parse(["--instance", "3"], true).options.portOf()).toBe(5531)
+  expect(parse(["--instance", "3", "--port", "6000"], true).options.portOf()).toBe(6000)
+  expect(parse(["--port", "6000", "--instance", "3"], true).options.portOf()).toBe(6000)
+}
+
+function theRangesAreChecked(): void {
+  expect(errorOf(["--rate", "9"])).toBe("error 2: --rate wants a whole number from 10 to 100, not 9")
+  expect(ok(["--rate", "10"])).toBe("run 0")
+  expect(ok(["--rate", "100"])).toBe("run 0")
+  expect(errorOf(["--rate", "101"])).toBe("error 2: --rate wants a whole number from 10 to 100, not 101")
+  expect(errorOf(["--offset", "9"])).toBe("error 2: --offset wants a whole number from 0 to 8, not 9")
+  expect(errorOf(["--port", "1023"])).toBe("error 2: --port wants a whole number from 1024 to 65535, not 1023")
+  expect(errorOf(["--port", "65536"])).toBe("error 2: --port wants a whole number from 1024 to 65535, not 65536")
+  expect(ok(["--port", "1024"])).toBe("run 0")
+  expect(errorOf(["--exit-after", "0"])).toBe("error 2: --exit-after wants a whole number from 1 to 86400, not 0")
+  expect(errorOf(["--rate", "fast"])).toBe("error 2: --rate wants a whole number from 10 to 100, not fast")
+  expect(errorOf(["--rate", "-5"])).toBe("error 2: --rate wants a whole number from 10 to 100, not -5")
+  expect(errorOf(["--instance", "100"])).toBe("error 2: --instance wants a whole number from 0 to 99, not 100")
+}
+
+function anInstanceWhosePortWouldPassTheEndIsRefused(): void {
+  expect(ok(["--instance", "99"])).toBe("run 0")
+  expect(parse(["--instance", "99"], true).options.portOf()).toBe(6491)
+}
+
+function sticksOutsideOneToSixteenAndDuplicatesAreRefused(): void {
+  expect(errorOf(["--sticks", "0,2,3,4"])).toBe("error 2: --sticks wants four RC channels from 1 to 16, like 1,2,3,4: not 0,2,3,4")
+  expect(errorOf(["--sticks", "1,2,3,17"])).toBe("error 2: --sticks wants four RC channels from 1 to 16, like 1,2,3,4: not 1,2,3,17")
+  expect(errorOf(["--sticks", "1,2,3"])).toBe("error 2: --sticks wants four RC channels from 1 to 16, like 1,2,3,4: not 1,2,3")
+  expect(errorOf(["--sticks", "1,2,3,4,5"])).toBe("error 2: --sticks wants four RC channels from 1 to 16, like 1,2,3,4: not 1,2,3,4,5")
+  expect(errorOf(["--sticks", "1,2,a,4"])).toBe("error 2: --sticks wants four RC channels from 1 to 16, like 1,2,3,4: not 1,2,a,4")
+  expect(errorOf(["--sticks", "1,2,3,3"])).toBe("error 2: --sticks wants four different channels: not 1,2,3,3")
+  expect(errorOf(["--sticks", "4,4,4,4"])).toBe("error 2: --sticks wants four different channels: not 4,4,4,4")
+  expect(ok(["--sticks", "16,15,14,13"])).toBe("run 0")
+}
+
+function theThrottleRestIsCentreOrLow(): void {
+  expect(parse(["--throttle-rest", "centre"], true).options.throttleLow).toBe(false)
+  expect(parse(["--throttle-rest", "low"], true).options.throttleLow).toBe(true)
+  expect(errorOf(["--throttle-rest", "high"])).toBe("error 2: --throttle-rest wants centre or low, not high")
+}
+
+function aHostIsAnIpOrANameButNotABroadcastOrMulticast(): void {
+  expect(ok(["--host", "192.168.1.20"])).toBe("run 0")
+  expect(ok(["--host", "sitl-vm.local"])).toBe("run 0")
+  expect(errorOf(["--host", "255.255.255.255"])).toBe("error 2: --host 255.255.255.255: the broadcast address: name the host that runs SITL")
+  expect(errorOf(["--host", "224.0.0.1"])).toBe("error 2: --host 224.0.0.1: a multicast address: name the host that runs SITL")
+  expect(errorOf(["--host", "239.255.255.250"])).toBe("error 2: --host 239.255.255.250: a multicast address: name the host that runs SITL")
+  expect(errorOf(["--host", "0.0.0.0"])).toBe("error 2: --host 0.0.0.0: the address 0.0.0.0: name the host that runs SITL")
+  expect(errorOf(["--host", "::1"])).toBe("error 2: --host ::1: an IPv6 address: use an IPv4 address or a name")
+  expect(addressProblem("223.255.255.255")).toBe("")
+  expect(addressProblem("240.0.0.1")).toBe("")
+}
+
+function aMissingValueAnUnknownFlagAndAValueOnAFlagWithoutOneAreUsageErrors(): void {
+  expect(errorOf(["--rate"])).toBe("error 2: --rate wants a value")
+  expect(errorOf(["--nope"])).toBe("error 2: unknown option --nope")
+  expect(errorOf(["somewhere"])).toBe("error 2: unknown option somewhere")
+  expect(errorOf(["--go=yes"])).toBe("error 2: --go takes no value")
+}
+
+function theActionsAreListHelpAndVersionAndTheyNeedNoGo(): void {
+  expect(parse(["--list"], false).action).toBe("list")
+  expect(parse(["--help"], false).action).toBe("help")
+  expect(parse(["--version"], false).action).toBe("version")
+}
+
+function withoutATerminalAStartNeedsGo(): void {
+  expect(errorOf([], false)).toBe("error 4: stdin is not a terminal: there is nobody to press Enter. Start it with --go (it then sends as soon as the sticks are at rest)")
+  expect(parse(["--go"], false).action).toBe("run")
+  expect(parse([], true).action).toBe("run")
+}
+
+function theUsageNamesEveryFlagAndTheExitCodes(): void {
+  for (const flag of ["--list", "--pad", "--instance", "--port", "--host", "--rate", "--offset", "--sticks", "--throttle-rest", "--rudder-arm", "--go", "--fake-pad", "--exit-after", "--quiet", "--version", "--help"]) {
+    expect(USAGE.includes(flag)).toBe(true)
+  }
+  expect(USAGE.includes("5 the UDP socket could not be made or the host not resolved")).toBe(true)
+}
+
+function digitsAreOnlyDigits(): void {
+  expect(`${digits("0")} ${digits("42")} ${digits("")} ${digits("4 2")} ${digits("-1")} ${digits("1.5")} ${digits("12345678901")}`).toBe("0 42 -1 -1 -1 -1 -1")
+}
+
+describe("the command line", () => {
+  it("has the defaults of the plan", theDefaultsAreThoseOfThePlan)
+  it("reads every flag", everyFlagIsRead)
+  it("takes --flag=value as well", theFlagMayBeWrittenWithAnEqualsSign)
+  it("lets an explicit --port win over --instance", anExplicitPortWinsOverTheInstance)
+  it("checks every range", theRangesAreChecked)
+  it("keeps the port of the highest instance under 65535", anInstanceWhosePortWouldPassTheEndIsRefused)
+  it("refuses --sticks outside 1..16, of the wrong count, and with duplicates", sticksOutsideOneToSixteenAndDuplicatesAreRefused)
+  it("takes the throttle rest as centre or low", theThrottleRestIsCentreOrLow)
+  it("takes --host as an IPv4 address or a name, and refuses a broadcast, a multicast, 0.0.0.0 and IPv6", aHostIsAnIpOrANameButNotABroadcastOrMulticast)
+  it("refuses a missing value, an unknown flag and a value on a flag without one", aMissingValueAnUnknownFlagAndAValueOnAFlagWithoutOneAreUsageErrors)
+  it("has the actions list, help and version, which need no --go", theActionsAreListHelpAndVersionAndTheyNeedNoGo)
+  it("refuses a start without a terminal and without --go (4)", withoutATerminalAStartNeedsGo)
+  it("has a usage text that names every flag and the exit codes", theUsageNamesEveryFlagAndTheExitCodes)
+  it("reads a number only in digits", digitsAreOnlyDigits)
+})

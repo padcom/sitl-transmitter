@@ -1,0 +1,40 @@
+// The spike: a signal that is blocked does not end the process, and is seen as pending. This test sends THIS process a SIGTERM and a
+// SIGINT (process-directed, so any thread without them blocked would take them and end the run) and polls.
+import { describe, it, expect } from "std/test"
+import { delay } from "std/timers"
+import { SIGINT, SIGTERM, block, isTerminal, signalSelf, terminated } from "./signals.linux"
+
+async function nothingIsPendingBeforeAnythingIsSent(): Promise<void> throws Error {
+  expect(block()).toBe(true)
+  expect(terminated()).toBe(false)
+}
+
+async function aSigtermThatIsBlockedDoesNotEndTheProcessAndIsSeenPending(): Promise<void> throws Error {
+  expect(block()).toBe(true)
+  // (let the runtime run its timers first: a thread it made BEFORE the block would take the signal and end this process)
+  await delay(50)
+  expect(signalSelf(SIGTERM)).toBe(true)
+  await delay(100)
+  expect(terminated()).toBe(true)
+}
+
+async function aSigintToo(): Promise<void> throws Error {
+  expect(block()).toBe(true)
+  await delay(20)
+  expect(signalSelf(SIGINT)).toBe(true)
+  await delay(50)
+  expect(terminated()).toBe(true)
+}
+
+function theTerminalCheckAnswersWithoutFailing(): void {
+  // (a test run has no terminal on stdin or has one: the check must simply answer)
+  const answer = isTerminal()
+  expect(answer == true || answer == false).toBe(true)
+}
+
+describe("the signals", () => {
+  it("are not pending before one is sent", nothingIsPendingBeforeAnythingIsSent)
+  it("hold back a SIGTERM sent to the process, which is seen as pending", aSigtermThatIsBlockedDoesNotEndTheProcessAndIsSeenPending)
+  it("hold back a SIGINT too", aSigintToo)
+  it("are not a reason to fail the terminal check", theTerminalCheckAnswersWithoutFailing)
+})

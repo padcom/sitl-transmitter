@@ -1,0 +1,138 @@
+// A pad that is a script (`--fake-pad <file>`), for the tests, the e2e and for trying the program without the radio. JSON Lines, each
+//   {"t": <ms since start>, "axes": [<-1..1, or null for "unchanged">, ...], "buttons": [<0|1, or null>, ...]}
+// (either list may be left out). The last state holds; before the first line every axis is 0 and every button released. The pad has as
+// many axes and buttons as the longest list in the script. A blank line, or one that starts with `#`, is skipped.
+import { Reading } from "./gate"
+import { Source } from "./source"
+
+struct Line {
+  t: int
+  axes?: f64?[]
+  buttons?: int?[]
+}
+
+/// A script that was read: its lines in time order, and the size of the pad it describes.
+export class Script {
+  public readonly lines: Line[] = []
+  public axes: int = 0
+  public buttons: int = 0
+  /// "" when it was read, else the line that is wrong.
+  public problem: string = ""
+}
+
+/// Reads a script's text. A line that is not valid, or goes back in time, makes the whole script a problem (with its number).
+export function readScript(text: string): Script {
+  const script = new Script()
+  const rows = text.split("\n")
+  let last = 0
+  for (let n = 0; n < rows.length; n++) {
+    const row = rows[n].trim()
+    if (row.length == 0 || row.startsWith("#")) {
+      continue
+    }
+    try {
+      const line = JSON.parse<Line>(row)
+      if (line.t < last) {
+        script.problem = `line ${n + 1}: t goes back in time (${line.t} after ${last})`
+        return script
+      }
+      last = line.t
+      const axes = line.axes
+      if (axes != null && axes!.length > script.axes) {
+        script.axes = axes!.length
+      }
+      const buttons = line.buttons
+      if (buttons != null && buttons!.length > script.buttons) {
+        script.buttons = buttons!.length
+      }
+      script.lines.push(line)
+    } catch (e: Error) {
+      script.problem = `line ${n + 1}: ${e.message}`
+      return script
+    }
+  }
+  return script
+}
+
+/// The pad of a script: `read(now)` is the state the script has reached by `now` ms after the first read.
+export class FakeSource implements Source {
+  public readonly script: Script
+  public started: int = -1
+  public opened: bool = false
+  /// Whether the pad is "unplugged" (a test sets it; `read` then gives null).
+  public gone: bool = false
+
+  constructor(script: Script) {
+    this.script = script
+  }
+
+  public async open(): Promise<string> throws Error {
+    if (gone) {
+      return "NO_PAD"
+    }
+    opened = true
+    return ""
+  }
+
+  public name(): string {
+    return "fake pad"
+  }
+
+  public id(): string {
+    return "fake:0000"
+  }
+
+  public axes(): int {
+    return script.axes
+  }
+
+  public buttons(): int {
+    return script.buttons
+  }
+
+  public read(now: int): Reading? {
+    if (gone || !opened) {
+      return null
+    }
+    if (started < 0) {
+      started = now
+    }
+    const at = now - started
+    const axes: f64[] = []
+    const buttons: bool[] = []
+    for (let i = 0; i < script.axes; i++) {
+      axes.push(0.0)
+    }
+    for (let j = 0; j < script.buttons; j++) {
+      buttons.push(false)
+    }
+    for (const line of script.lines) {
+      if (line.t > at) {
+        break
+      }
+      const a = line.axes
+      if (a != null) {
+        for (let i = 0; i < a!.length; i++) {
+          const v = a![i]
+          if (v != null) {
+            axes[i] = v!
+          }
+        }
+      }
+      const b = line.buttons
+      if (b != null) {
+        for (let j = 0; j < b!.length; j++) {
+          const v = b![j]
+          if (v != null) {
+            buttons[j] = v! != 0
+          }
+        }
+      }
+    }
+    return new Reading(axes, buttons)
+  }
+
+  public close(): void {
+    opened = false
+  }
+}

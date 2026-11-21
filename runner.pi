@@ -1,0 +1,173 @@
+// The loop (section 6 of the plan): open the pad, say what was found, wait for the go, then every tick (1000 / rate ms) a fresh reading
+// goes through the gate machine and what it asks for is sent. It knows a pad only as a `Source`, time only as a `Time`, the network only
+// as a `Sink` and the keyboard only as a `Control`, so the tests run it all without a device, a socket or a sleep.
+import { Layout } from "./channels"
+import { Options } from "./cli"
+import { Config, Machine, WAITING } from "./gate"
+import { Sink } from "./sender"
+import { Source } from "./source"
+
+/// Time: milliseconds on a clock that only goes forward, and a wait.
+export interface Time {
+  now(): int
+  wait(ms: int): Promise<void, Error>
+}
+
+/// What the person (or a signal) has said: go (Enter), and quit (`q`, end of input, a signal).
+export class Control {
+  public go: bool = false
+  public quit: bool = false
+}
+
+/// Where the program says things.
+export interface Out {
+  line(text: string): void
+}
+
+/// How long a pad that is refused (the desktop's access rule comes late) is tried again, and how often a lost pad is looked for.
+export const DENIED_FOR_MS = 2000
+export const REOPEN_MS = 1000
+/// The two neutral frames of a normal end, this far apart (UDP loses packets).
+export const NEUTRAL_GAP_MS = 20
+
+/// What the status line says of the pulses: CH1..CH8.
+function channels(frame: int[]): string {
+  let out = ""
+  for (let i = 0; i < 8; i++) {
+    out += (if (i > 0) " " else "") + `${if (i < frame.length) frame[i] else 0}`
+  }
+  return out
+}
+
+/// The exit code for a pad that could not be opened, and what to tell the person.
+function noPadMessage(code: string): string {
+  if (code == "PERMISSION_DENIED") {
+    return "the pad cannot be opened: the desktop has not given this user the device yet (a udev rule with uaccess does; do not add yourself to the input group)"
+  }
+  if (code == "NOT_A_PAD") {
+    return "that device is not a gamepad or a radio"
+  }
+  return if (code == "NO_PAD") "no gamepad found: plug the radio in (use --list to see what there is)" else `the pad could not be opened (${code})`
+}
+
+/// Opens the pad, trying again for `DENIED_FOR_MS` while it is refused. "" when it is open, else the code.
+async function openPad(source: Source, clock: Time): Promise<string> throws Error {
+  let code = await source.open()
+  const until = clock.now() + DENIED_FOR_MS
+  while (code == "PERMISSION_DENIED" && clock.now() < until) {
+    await clock.wait(200)
+    code = await source.open()
+  }
+  return code
+}
+
+/// What the program says before it sends: the pad, its channels, where it sends and what it holds.
+function banner(options: Options, source: Source, layout: Layout, destination: string, out: Out): void {
+  out.line(`pad: ${source.name()} (${source.id()}): ${source.axes()} axes, ${source.buttons()} buttons`)
+  out.line(`axes -> RC channels ${1 + options.offset}..${source.axes() + options.offset}, buttons -> the channels after them`)
+  if (layout.droppedAxes > 0 || layout.droppedButtons > 0) {
+    out.line(`dropped (no channel left): ${layout.droppedAxes} axes, ${layout.droppedButtons} buttons`)
+  }
+  out.line(`sticks: roll ${options.sticks[0]}, pitch ${options.sticks[1]}, throttle ${options.sticks[2]}, yaw ${options.sticks[3]}; the throttle rests ${if (options.throttleLow) "low" else "in the middle"}`)
+  out.line(`sending to ${destination}: for ArduPilot SITL only (${options.rate} packets a second)`)
+}
+
+/// Runs until the person quits, the time is up, the start is refused or ... the end of the program. `destination` is "host:port" as it
+/// is said to the person. Returns the exit code: 0 normal, 3 no pad, 4 refused, 5 the network.
+export async function run(options: Options, source: Source, sink: Sink, clock: Time, out: Out, control: Control, destination: string): Promise<int> throws Error {
+  const code = await openPad(source, clock)
+  if (code != "") {
+    out.line(noPadMessage(code))
+    return 3
+  }
+  const layout = new Layout(source.axes(), source.buttons(), options.offset)
+  const machine = new Machine(new Config(layout, options.sticks, options.throttleLow, options.rudderArm))
+  const refusal = machine.problem()
+  if (refusal != "") {
+    out.line(refusal)
+    source.close()
+    return 4
+  }
+  banner(options, source, layout, destination, out)
+  machine.padOpened()
+  if (options.go) {
+    machine.start()
+  } else {
+    out.line("Press Enter to start sending (q + Enter ends it)")
+  }
+  const period = Math.round(1000.0 / (options.rate as f64)) as int
+  const begin = clock.now()
+  const limit = if (options.exitAfter > 0) begin + options.exitAfter * 1000 else -1
+  let next = begin
+  let nextStatus = begin + 1000
+  let nextOpen = begin
+  let last: int[] = []
+  let result = 0
+  while (!control.quit && (limit < 0 || clock.now() < limit)) {
+    const now = clock.now()
+    if (!machine.started && control.go) {
+      machine.start()
+    }
+    if (machine.state == WAITING) {
+      // (the pad was lost: the SAME pad is looked for once a second, and the gate runs again when it is back)
+      if (now >= nextOpen) {
+        nextOpen = now + REOPEN_MS
+        if ((await source.open()) == "") {
+          machine.padOpened()
+          out.line(`${source.name()} is back: the gate runs again`)
+        }
+      }
+    } else {
+      const step = machine.tick(now, source.read(now))
+      if (step.message != "") {
+        out.line(step.message)
+      }
+      if (step.kind == "refused") {
+        result = 4
+        break
+      }
+      if (step.kind == "frame" || step.kind == "neutral") {
+        last = step.frame
+        try {
+          await sink.send(step.frame)
+        } catch (e: Error) {
+          out.line(`sending failed: ${e.message}`)
+          result = 5
+          break
+        }
+        if (step.kind == "neutral") {
+          out.line("the pad stalled or went: one neutral frame sent, the gate runs again")
+        }
+      }
+    }
+    if (!options.quiet && now >= nextStatus) {
+      nextStatus = now + 1000
+      out.line(`${machine.state}: ${source.name()}, ${machine.frames} packets, CH1..CH8 ${channels(last)}`)
+    }
+    next += period
+    const waiting = next - clock.now()
+    if (waiting > 0) {
+      await clock.wait(waiting)
+    } else {
+      next = clock.now()
+    }
+  }
+  if (result == 0 && machine.sentAny) {
+    // (a normal end: the neutral frame twice, 20 ms apart, so that SITL is not left with the last stick: but only when it was ever given a
+    // frame: a run that never passed the gate has touched nothing)
+    await endNeutral(machine, sink, clock, out)
+  }
+  source.close()
+  return result
+}
+
+async function endNeutral(machine: Machine, sink: Sink, clock: Time, out: Out): Promise<void> throws Error {
+  try {
+    await sink.send(machine.neutral())
+    await clock.wait(NEUTRAL_GAP_MS)
+    await sink.send(machine.neutral())
+    out.line("ended: the neutral frame was sent twice")
+  } catch (e: Error) {
+    out.line(`the neutral frame could not be sent: ${e.message}`)
+  }
+}

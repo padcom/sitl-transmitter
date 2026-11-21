@@ -1,0 +1,17 @@
+// Where the pad's readings come from, as the runner sees it: a real device (devicesource.pi) or a script (fakepad.pi). The runner knows
+// nothing else of a pad: a name, how many axes and buttons, and a fresh reading when it asks (null once the pad is gone).
+import { Reading } from "./gate"
+
+export interface Source {
+  /// Opens the pad: "" when it is open, else the code of why not (`NO_PAD`, `PERMISSION_DENIED`, `NOT_A_PAD`, `IO`).
+  open(): Promise<string, Error>
+  /// The pad's name, its stable id, and how many axes and buttons it has (known once it was opened).
+  name(): string
+  id(): string
+  axes(): int
+  buttons(): int
+  /// A FRESH reading at `now` (ms, the runner's clock), or null when the pad is gone (unplugged, or a read failed).
+  read(now: int): Reading?
+  /// Lets go of the pad.
+  close(): void
+}

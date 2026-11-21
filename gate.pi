@@ -171,11 +171,25 @@ export class Machine {
     return if (config.throttleLow) v <= LOW else Math.abs(v) <= BAND
   }
 
+  /// Whether a reading has the axis of every stick.
+  private complete(axes: f64[]): bool {
+    for (let i = 0; i < STICKS.length; i++) {
+      if (config.layout.axisOf(config.sticks[i]) >= axes.length) {
+        return false
+      }
+    }
+    return true
+  }
+
   /// The first stick that is not at rest, as a line ("roll is not at the middle: +0.72"), or "".
   private offStick(axes: f64[]): string {
     for (let i = 0; i < STICKS.length; i++) {
       const index = config.layout.axisOf(config.sticks[i])
-      const v = if (index >= 0 && index < axes.length) axes[index] else 0.0
+      if (index >= axes.length) {
+        // (a reading with fewer axes than the pad has: the stick is not there to be at rest, and is never taken for 0.0)
+        return `${STICKS[i]} is missing from the reading (the pad reports ${axes.length} axes)`
+      }
+      const v = axes[index]
       const throttle = i == 2
       const fine = if (throttle) throttleRests(v) else Math.abs(v) <= BAND
       if (!fine) {
@@ -215,8 +229,14 @@ export class Machine {
       good = 0
       return new Step("neutral", neutral(), "")
     }
+    if (!complete(reading.axes)) {
+      // (a reading that lost an axis of a stick is a pad that changed under us: neutral, and the gate again)
+      state = GATE
+      good = 0
+      return new Step("neutral", neutral(), "")
+    }
     const throttleIndex = config.layout.axisOf(config.sticks[2])
-    const throttle = if (throttleIndex >= 0 && throttleIndex < reading.axes.length) reading.axes[throttleIndex] else 0.0
+    const throttle = reading.axes[throttleIndex]
     const held = !config.rudderArm && throttle <= BOTTOM
     const frame = frameOf(config.layout, reading.axes, reading.buttons, config.sticks[3], if (held) YAW_LIMIT else 1.0)
     lastFrameAt = now

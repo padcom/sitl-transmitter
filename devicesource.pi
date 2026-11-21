@@ -1,0 +1,126 @@
+// A real pad through pico-gamepad as a `Source`: chosen once from the list (`pickPad`), and opened again by the SAME id after a loss, never
+// another pad. Its readings are `PadState`s: axes already -1..1 by the range the device declares, buttons pressed or not.
+import { Pad, PadError, PadInfo, PadSystem, defaultSystem, listPads, openPad } from "padcom/pico-gamepad"
+import { Reading } from "./gate"
+import { Source } from "./source"
+import { digits } from "./cli"
+
+/// The pad a `--pad` text (or none) stands for: its index in the list, or why not.
+export class Pick {
+  public index: int = -1
+  public problem: string = ""
+  /// The exit code of the problem: 3 when there is no pad at all, 2 when the choice is the person's to make again.
+  public code: int = 0
+}
+
+/// The index text of the list, the exact id, or a part of the name (any case): one pad, else a reason. With no text the only pad.
+export function pickPad(pads: PadInfo[], text: string): Pick {
+  const pick = new Pick()
+  if (pads.length == 0) {
+    pick.problem = "no gamepad found: plug the radio in (use --list to see what there is)"
+    pick.code = 3
+    return pick
+  }
+  if (text.length == 0) {
+    if (pads.length == 1) {
+      pick.index = 0
+    } else {
+      pick.problem = "there is more than one pad: say which with --pad (an index, an id or a part of the name of the list below)"
+      pick.code = 2
+    }
+    return pick
+  }
+  const n = digits(text)
+  if (n >= 0 && n < pads.length && !text.includes(":")) {
+    pick.index = n
+    return pick
+  }
+  const matches: int[] = []
+  for (let i = 0; i < pads.length; i++) {
+    if (pads[i].id == text || pads[i].name.toLowerCase().includes(text.toLowerCase())) {
+      matches.push(i)
+    }
+  }
+  if (matches.length == 1) {
+    pick.index = matches[0]
+  } else {
+    pick.problem = if (matches.length == 0) `no pad matches ${text}` else `${text} matches ${matches.length} pads: use the index or the exact id`
+    pick.code = 2
+  }
+  return pick
+}
+
+/// One line of the `--list` output.
+export function listLine(index: int, pad: PadInfo): string {
+  return `${index}: ${pad.name}  id ${pad.id}  ${pad.path}  ${pad.axisCodes.length} axes, ${pad.buttonCodes.length} buttons`
+}
+
+export class DeviceSource implements Source {
+  public readonly wanted: PadInfo
+  public readonly system: PadSystem
+  public pad: Pad? = null
+
+  constructor(wanted: PadInfo, system: PadSystem = defaultSystem()) {
+    this.wanted = wanted
+    this.system = system
+  }
+
+  /// Opens the pad of the wanted id (listed again: its path may have changed). "" when open, else the code.
+  public async open(): Promise<string> throws Error {
+    let info: PadInfo? = null
+    for (const candidate of await listPads(system)) {
+      if (candidate.id == wanted.id) {
+        info = candidate
+      }
+    }
+    if (info == null) {
+      return "NO_PAD"
+    }
+    try {
+      pad = await openPad(info!, system)
+    } catch (e: PadError) {
+      return if (e.code == "PERMISSION_DENIED" || e.code == "NOT_A_PAD") e.code else if (e.code == "NOT_FOUND") "NO_PAD" else "IO"
+    }
+    return ""
+  }
+
+  public name(): string {
+    return wanted.name
+  }
+
+  public id(): string {
+    return wanted.id
+  }
+
+  public axes(): int {
+    const p = pad
+    return if (p != null) p!.axes.length else wanted.axisCodes.length
+  }
+
+  public buttons(): int {
+    return wanted.buttonCodes.length
+  }
+
+  public read(_now: int): Reading? {
+    const p = pad
+    if (p == null) {
+      return null
+    }
+    try {
+      const state = p!.state()
+      return new Reading(state.axes, state.buttons)
+    } catch (e: PadError) {
+      p!.close()
+      pad = null
+      return null
+    }
+  }
+
+  public close(): void {
+    const p = pad
+    if (p != null) {
+      p!.close()
+      pad = null
+    }
+  }
+}

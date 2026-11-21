@@ -1,0 +1,7 @@
+# A TX16S at rest for a second, then the roll stick moves right and back, a switch (CH9) goes up: `--fake-pad examples/hover.jsonl`.
+# t is in ms since the start; null is "unchanged"; the last state holds. 8 axes (CH1..CH8) and 8 buttons (CH9..CH16).
+{"t": 0, "axes": [0, 0, 0, 0, 0, 0, 0, 0], "buttons": [0, 0, 0, 0, 0, 0, 0, 0]}
+{"t": 2000, "axes": [0.5]}
+{"t": 3000, "axes": [1.0]}
+{"t": 4000, "axes": [0.0], "buttons": [1]}
+{"t": 6000, "buttons": [0]}

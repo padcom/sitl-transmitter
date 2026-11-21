@@ -1,0 +1,255 @@
+// The whole loop, with a scripted pad, time that only moves when it waits, and a sink that records: what is sent, when, and what the
+// program says and returns (exit codes 0, 3, 4, 5).
+import { describe, it, expect } from "std/test"
+import { Options } from "./cli"
+import { FakeSource, readScript } from "./fakepad"
+import { Control, run } from "./runner"
+import { Source } from "./source"
+import { Lines, Recorder, FakeTime } from "./testing"
+import { Reading } from "./gate"
+
+const NEUTRAL = "1500,1500,1500,1500,0,0,0,0,0,0,0,0,0,0,0,0"
+
+function text(frame: int[]): string {
+  let out = ""
+  for (let i = 0; i < frame.length; i++) {
+    out += (if (i > 0) "," else "") + `${frame[i]}`
+  }
+  return out
+}
+
+/// A radio at rest: 8 axes in the middle and 8 buttons released.
+const REST = `{"t": 0, "axes": [0, 0, 0, 0, 0, 0, 0, 0], "buttons": [0, 0, 0, 0, 0, 0, 0, 0]}`
+
+function sourceOf(script: string): FakeSource {
+  const read = readScript(script)
+  expect(read.problem).toBe("")
+  return new FakeSource(read)
+}
+
+function goOptions(seconds: int): Options {
+  const options = new Options()
+  options.go = true
+  options.exitAfter = seconds
+  options.quiet = true
+  return options
+}
+
+class Run {
+  public code: int = -1
+  public time: FakeTime = new FakeTime()
+  public sink: Recorder = new Recorder()
+  public said: Lines = new Lines()
+  public control: Control = new Control()
+
+  constructor() {
+    this.sink.time = this.time
+  }
+
+  public async go(options: Options, source: Source): Promise<void> throws Error {
+    code = await run(options, source, sink, time, said, control, "127.0.0.1:5501")
+  }
+}
+
+async function aRunSendsFramesAtTheRateAfterTheGateAndTheNeutralFrameTwiceAtTheEnd(): Promise<void> throws Error {
+  const r = new Run()
+  await r.go(goOptions(2), sourceOf(REST))
+  expect(r.code).toBe(0)
+  const n = r.sink.frames.length
+  // (2 s at 50 Hz is 100 ticks, 10 of them at the gate, then the 2 neutral frames)
+  expect(n > 80 && n < 96).toBe(true)
+  expect(text(r.sink.frames[0])).toBe("1500,1500,1500,1500,1500,1500,1500,1500,1000,1000,1000,1000,1000,1000,1000,1000")
+  expect(text(r.sink.frames[n - 1])).toBe(NEUTRAL)
+  expect(text(r.sink.frames[n - 2])).toBe(NEUTRAL)
+  expect(r.sink.at[n - 1] - r.sink.at[n - 2]).toBe(20)
+  expect(r.said.has("sending to 127.0.0.1:5501: for ArduPilot SITL only")).toBe(true)
+  expect(r.said.has("ended: the neutral frame was sent twice")).toBe(true)
+}
+
+async function nothingIsSentWhileAStickIsOffAndTheGateSaysWhich(): Promise<void> throws Error {
+  const r = new Run()
+  const script = `{"t": 0, "axes": [0.6, 0, 0, 0, 0, 0, 0, 0], "buttons": [0, 0, 0, 0, 0, 0, 0, 0]}\n{"t": 1000, "axes": [0.0]}`
+  await r.go(goOptions(3), sourceOf(script))
+  expect(r.code).toBe(0)
+  expect(r.sink.at[0] >= 1200).toBe(true)
+  expect(r.said.has("roll is not at the middle: +0.60")).toBe(true)
+}
+
+async function aRunThatNeverPassesTheGateSendsNothingNotEvenTheNeutralFrame(): Promise<void> throws Error {
+  const r = new Run()
+  const script = `{"t": 0, "axes": [0.6, 0, 0, 0, 0, 0, 0, 0], "buttons": [0, 0, 0, 0, 0, 0, 0, 0]}`
+  await r.go(goOptions(2), sourceOf(script))
+  expect(`${r.code} ${r.sink.frames.length}`).toBe("0 0")
+}
+
+async function withoutGoItWaitsForEnter(): Promise<void> throws Error {
+  const r = new Run()
+  const options = goOptions(3)
+  options.go = false
+  r.time.at(1000, () => {
+    r.control.go = true
+  })
+  await r.go(options, sourceOf(REST))
+  expect(r.code).toBe(0)
+  expect(r.said.has("Press Enter to start sending")).toBe(true)
+  expect(r.sink.at[0] >= 1200).toBe(true)
+}
+
+async function withoutAnEnterNothingIsSentAndNothingIsOwed(): Promise<void> throws Error {
+  const r = new Run()
+  const options = goOptions(2)
+  options.go = false
+  await r.go(options, sourceOf(REST))
+  expect(`${r.code} ${r.sink.frames.length}`).toBe("0 0")
+}
+
+async function aPadThatIsUnpluggedGivesOneNeutralFrameAndThenTheGateAgainWithoutEnter(): Promise<void> throws Error {
+  const r = new Run()
+  const source = sourceOf(REST)
+  r.time.at(1000, () => {
+    source.gone = true
+  })
+  r.time.at(2500, () => {
+    source.gone = false
+  })
+  await r.go(goOptions(6), source)
+  expect(r.code).toBe(0)
+  let neutralsInTheMiddle = 0
+  let inTheGap = 0
+  for (let i = 0; i < r.sink.frames.length; i++) {
+    if (r.sink.at[i] >= 1000 && r.sink.at[i] < 2500) {
+      inTheGap += 1
+      if (text(r.sink.frames[i]) == NEUTRAL) {
+        neutralsInTheMiddle += 1
+      }
+    }
+  }
+  // (one neutral frame when it went, then silence until it is back and the gate has been passed again)
+  expect(`${neutralsInTheMiddle} ${inTheGap}`).toBe("1 1")
+  expect(r.said.has("fake pad is back: the gate runs again")).toBe(true)
+  expect(r.sink.at[r.sink.frames.length - 3] > 3000).toBe(true)
+  let asked = 0
+  for (const s of r.said.said) {
+    if (s.includes("Press Enter")) {
+      asked += 1
+    }
+  }
+  expect(asked).toBe(0)
+}
+
+async function aStickMappedToAButtonIsRefusedWithCodeFour(): Promise<void> throws Error {
+  const r = new Run()
+  const options = goOptions(2)
+  options.sticks = [1, 2, 3, 12]
+  await r.go(options, sourceOf(REST))
+  expect(`${r.code} ${r.sink.frames.length}`).toBe("4 0")
+  expect(r.said.has("yaw is on RC channel 12")).toBe(true)
+}
+
+async function noPadIsCodeThreeWithAHint(): Promise<void> throws Error {
+  const r = new Run()
+  const source = sourceOf(REST)
+  source.gone = true
+  await r.go(goOptions(2), source)
+  expect(`${r.code} ${r.sink.frames.length}`).toBe("3 0")
+  expect(r.said.has("no gamepad found")).toBe(true)
+}
+
+class Denied implements Source {
+  public tries: int = 0
+
+  public async open(): Promise<string> throws Error {
+    tries += 1
+    return "PERMISSION_DENIED"
+  }
+
+  public name(): string {
+    return "denied"
+  }
+
+  public id(): string {
+    return "0000:0000"
+  }
+
+  public axes(): int {
+    return 0
+  }
+
+  public buttons(): int {
+    return 0
+  }
+
+  public read(now: int): Reading? {
+    return null
+  }
+
+  public close(): void {}
+}
+
+async function aPadThatIsRefusedIsTriedForTwoSecondsThenCodeThreeAndNeverTheInputGroup(): Promise<void> throws Error {
+  const r = new Run()
+  const source = new Denied()
+  await r.go(goOptions(2), source)
+  expect(r.code).toBe(3)
+  expect(r.time.ms >= 2000).toBe(true)
+  expect(source.tries > 5).toBe(true)
+  expect(r.said.has("uaccess")).toBe(true)
+  expect(r.said.has("do not add yourself to the input group")).toBe(true)
+}
+
+async function quitEndsItWithTheNeutralFrameTwice(): Promise<void> throws Error {
+  const r = new Run()
+  r.time.at(1500, () => {
+    r.control.quit = true
+  })
+  await r.go(goOptions(10), sourceOf(REST))
+  expect(r.code).toBe(0)
+  const n = r.sink.frames.length
+  expect(r.time.ms < 2000).toBe(true)
+  expect(`${text(r.sink.frames[n - 1])} ${text(r.sink.frames[n - 2])}`).toBe(`${NEUTRAL} ${NEUTRAL}`)
+}
+
+async function aSinkThatFailsIsCodeFive(): Promise<void> throws Error {
+  const r = new Run()
+  r.sink.broken = true
+  await r.go(goOptions(5), sourceOf(REST))
+  expect(r.code).toBe(5)
+  expect(r.said.has("sending failed: network is unreachable")).toBe(true)
+}
+
+async function theStatusLineIsSaidOnceASecondUnlessQuiet(): Promise<void> throws Error {
+  const loud = new Run()
+  const options = goOptions(3)
+  options.quiet = false
+  await loud.go(options, sourceOf(REST))
+  let statuses = 0
+  for (const s of loud.said.said) {
+    if (s.startsWith("sending: fake pad")) {
+      statuses += 1
+    }
+  }
+  expect(statuses >= 2).toBe(true)
+  const silent = new Run()
+  await silent.go(goOptions(3), sourceOf(REST))
+  for (const s of silent.said.said) {
+    expect(s.startsWith("sending: fake pad")).toBe(false)
+  }
+}
+
+describe("a run", () => {
+  it("sends frames at the rate after the gate, and the neutral frame twice at the end", aRunSendsFramesAtTheRateAfterTheGateAndTheNeutralFrameTwiceAtTheEnd)
+  it("sends nothing while a stick is off, and the gate says which", nothingIsSentWhileAStickIsOffAndTheGateSaysWhich)
+  it("that never passes the gate sends nothing, not even the neutral frame", aRunThatNeverPassesTheGateSendsNothingNotEvenTheNeutralFrame)
+  it("waits for Enter without --go", withoutGoItWaitsForEnter)
+  it("sends nothing and owes nothing when Enter never comes", withoutAnEnterNothingIsSentAndNothingIsOwed)
+  it("gives one neutral frame for an unplugged pad, and the gate again (not Enter) when it is back", aPadThatIsUnpluggedGivesOneNeutralFrameAndThenTheGateAgainWithoutEnter)
+  it("ends with the neutral frame twice when the person quits", quitEndsItWithTheNeutralFrameTwice)
+  it("says the status once a second unless --quiet", theStatusLineIsSaidOnceASecondUnlessQuiet)
+})
+
+describe("a run that cannot start or go on", () => {
+  it("refuses a stick on a button with code 4", aStickMappedToAButtonIsRefusedWithCodeFour)
+  it("is code 3 with a hint when there is no pad", noPadIsCodeThreeWithAHint)
+  it("tries a refused pad for two seconds, then code 3, and never says the input group", aPadThatIsRefusedIsTriedForTwoSecondsThenCodeThreeAndNeverTheInputGroup)
+  it("is code 5 when the sink fails", aSinkThatFailsIsCodeFive)
+})
