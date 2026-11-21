@@ -1,0 +1,83 @@
+// The script format of --fake-pad: JSON Lines of {t, axes, buttons}, null for unchanged, the last state holds.
+import { describe, it, expect } from "std/test"
+import { FakeSource, readScript } from "./fakepad"
+
+function text(values: f64[]): string {
+  let out = ""
+  for (let i = 0; i < values.length; i++) {
+    out += (if (i > 0) "," else "") + `${values[i]}`
+  }
+  return out
+}
+
+function flags(values: bool[]): string {
+  let out = ""
+  for (let i = 0; i < values.length; i++) {
+    out += if (values[i]) "1" else "0"
+  }
+  return out
+}
+
+const SCRIPT = `# a comment, and a blank line below
+
+{"t": 0, "axes": [0, 0, -1, 0], "buttons": [0, 0]}
+{"t": 100, "axes": [0.5, null, null, 0.25]}
+{"t": 200, "buttons": [1, null]}
+{"t": 300, "axes": [null, null, 0.0]}`
+
+function theSizeOfThePadIsThatOfTheLongestList(): void {
+  const script = readScript(SCRIPT)
+  expect(script.problem).toBe("")
+  expect(`${script.lines.length} ${script.axes} ${script.buttons}`).toBe("4 4 2")
+}
+
+async function theStateIsWhatTheScriptHasReachedAndNullIsUnchanged(): Promise<void> throws Error {
+  const source = new FakeSource(readScript(SCRIPT))
+  expect(await source.open()).toBe("")
+  const first = source.read(1000)!
+  expect(`${text(first.axes)} ${flags(first.buttons)}`).toBe("0,0,-1,0 00")
+  expect(text(source.read(1099)!.axes)).toBe("0,0,-1,0")
+  expect(text(source.read(1100)!.axes)).toBe("0.5,0,-1,0.25")
+  const later = source.read(1250)!
+  expect(`${text(later.axes)} ${flags(later.buttons)}`).toBe("0.5,0,-1,0.25 10")
+  expect(text(source.read(1300)!.axes)).toBe("0.5,0,0,0.25")
+  // (the last state holds)
+  expect(text(source.read(999999)!.axes)).toBe("0.5,0,0,0.25")
+}
+
+async function aPadThatIsGoneReadsNullAndIsNotThereToOpen(): Promise<void> throws Error {
+  const source = new FakeSource(readScript(SCRIPT))
+  await source.open()
+  source.gone = true
+  expect(source.read(0) == null).toBe(true)
+  expect(await source.open()).toBe("NO_PAD")
+  source.gone = false
+  expect(await source.open()).toBe("")
+  expect(source.read(5) != null).toBe(true)
+}
+
+function aReadBeforeOpenIsNull(): void {
+  const source = new FakeSource(readScript(SCRIPT))
+  expect(source.read(0) == null).toBe(true)
+  expect(`${source.name()} ${source.axes()} ${source.buttons()}`).toBe("fake pad 4 2")
+}
+
+function aLineThatIsNotJsonOrGoesBackInTimeIsAProblemWithItsNumber(): void {
+  expect(readScript(`{"t": 0}\n{oops`).problem.startsWith("line 2: ")).toBe(true)
+  expect(readScript(`{"t": 500}\n{"t": 400}`).problem).toBe("line 2: t goes back in time (400 after 500)")
+  expect(readScript(`{"axes": [0]}`).problem.startsWith("line 1: ")).toBe(true)
+}
+
+function anEmptyScriptIsAPadWithNothing(): void {
+  const script = readScript("# nothing\n")
+  expect(`${script.problem}|${script.lines.length} ${script.axes} ${script.buttons}`).toBe("|0 0 0")
+}
+
+describe("the fake pad", () => {
+  it("is as big as the longest list in the script", theSizeOfThePadIsThatOfTheLongestList)
+  it("is the state the script has reached, null being unchanged, the last state holding", theStateIsWhatTheScriptHasReachedAndNullIsUnchanged)
+  it("reads null once it is gone, and cannot be opened until it is back", aPadThatIsGoneReadsNullAndIsNotThereToOpen)
+  it("reads null before it is opened", aReadBeforeOpenIsNull)
+  it("says which line of a script is wrong", aLineThatIsNotJsonOrGoesBackInTimeIsAProblemWithItsNumber)
+  it("may be a script with no lines", anEmptyScriptIsAPadWithNothing)
+})

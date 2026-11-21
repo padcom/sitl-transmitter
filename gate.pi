@@ -19,6 +19,11 @@ export const LOW = -0.85
 export const READS = 10
 /// A tick later than this (ms) after the last frame is a stall: neutral, and the gate again.
 export const LATE_MS = 100
+
+/// The lateness allowed at a tick period (ms): 100 ms, or three periods where the period is longer than 33 ms (--rate 10 is a 100 ms period).
+export function lateFor(period: int): int {
+  return if (period * 3 > LATE_MS) period * 3 else LATE_MS
+}
 /// The throttle value at or under which the yaw is held, and what it is held to (pwm 1100..1900).
 export const BOTTOM = -0.8
 export const YAW_LIMIT = 0.8
@@ -37,6 +42,8 @@ export class Config {
   public readonly throttleLow: bool
   /// Whether the sticks may arm and disarm: the yaw is then not held.
   public readonly rudderArm: bool
+  /// How late (ms) a tick may be after the last frame before it is a stall: at least LATE_MS, and more at a slow rate (see `lateFor`).
+  public lateMs: int = LATE_MS
 
   constructor(layout: Layout, sticks: int[], throttleLow: bool, rudderArm: bool) {
     this.layout = layout
@@ -171,11 +178,25 @@ export class Machine {
     return if (config.throttleLow) v <= LOW else Math.abs(v) <= BAND
   }
 
+  /// Whether a reading has the axis of every stick.
+  private complete(axes: f64[]): bool {
+    for (let i = 0; i < STICKS.length; i++) {
+      if (config.layout.axisOf(config.sticks[i]) >= axes.length) {
+        return false
+      }
+    }
+    return true
+  }
+
   /// The first stick that is not at rest, as a line ("roll is not at the middle: +0.72"), or "".
   private offStick(axes: f64[]): string {
     for (let i = 0; i < STICKS.length; i++) {
       const index = config.layout.axisOf(config.sticks[i])
-      const v = if (index >= 0 && index < axes.length) axes[index] else 0.0
+      if (index >= axes.length) {
+        // (a reading with fewer axes than the pad has: the stick is not there to be at rest, and is never taken for 0.0)
+        return `${STICKS[i]} is missing from the reading (the pad reports ${axes.length} axes)`
+      }
+      const v = axes[index]
       const throttle = i == 2
       const fine = if (throttle) throttleRests(v) else Math.abs(v) <= BAND
       if (!fine) {
@@ -209,14 +230,20 @@ export class Machine {
   }
 
   private sending(now: int, reading: Reading): Step {
-    if (now - lastFrameAt > LATE_MS) {
+    if (now - lastFrameAt > config.lateMs) {
       // (a stall: what the pad said is not what it says now, and nothing was sent in between: neutral, and the gate again)
       state = GATE
       good = 0
       return new Step("neutral", neutral(), "")
     }
+    if (!complete(reading.axes)) {
+      // (a reading that lost an axis of a stick is a pad that changed under us: neutral, and the gate again)
+      state = GATE
+      good = 0
+      return new Step("neutral", neutral(), "")
+    }
     const throttleIndex = config.layout.axisOf(config.sticks[2])
-    const throttle = if (throttleIndex >= 0 && throttleIndex < reading.axes.length) reading.axes[throttleIndex] else 0.0
+    const throttle = reading.axes[throttleIndex]
     const held = !config.rudderArm && throttle <= BOTTOM
     const frame = frameOf(config.layout, reading.axes, reading.buttons, config.sticks[3], if (held) YAW_LIMIT else 1.0)
     lastFrameAt = now

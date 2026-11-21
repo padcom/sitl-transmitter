@@ -1,0 +1,254 @@
+// The command line (section 4 of the plan): flags -> Options, with every range checked, the usage text, and the exit code of a
+// refusal (2 for a usage error, 4 for a start that is refused: not interactive and no --go). Pure: no I/O, no exit.
+
+/// The program's usage text.
+export const USAGE = `usage: sitl-transmitter [options]
+
+Reads one gamepad or radio and sends its channels, as a receiver would, to ArduPilot SITL's UDP RC input (SITL only: never a vehicle).
+
+  --list                      list the pads (index, name, id, path, axes, buttons) and exit
+  --pad <n|id|text>           the list index, the exact id (1209:4f54) or a part of the name (default: the only pad)
+  --instance <n>              SITL instance: port = 5501 + 10 n (default 0)
+  --port <p>                  UDP port 1024..65535; wins over --instance (default 5501)
+  --host <ip|name>            where SITL runs, e.g. a virtual machine (default 127.0.0.1); resolved once at start
+  --rate <hz>                 send rate 10..100 (default 50)
+  --offset <n>                channel offset 0..8: pad channel k goes to RC channel k + offset (default 0)
+  --sticks <r,p,t,y>          the RC channels of roll, pitch, throttle, yaw: the vehicle's RCMAP_* (default 1,2,3,4)
+  --throttle-rest centre|low  where the throttle rests (default centre)
+  --rudder-arm                lift the yaw hold, so that the sticks can arm and disarm
+  --go                        no "press Enter" (required when stdin is not a terminal)
+  --fake-pad <file>           read the pad from a script (JSON Lines) instead of a device
+  --exit-after <s>            end (after the neutral frame) after s seconds
+  --quiet                     no status line
+  --version, --help
+
+Ends with q + Enter (or Ctrl-C where the platform lets it). Exit codes: 0 normal end, 2 usage error, 3 no pad or no access to it,
+4 the start was refused, 5 the UDP socket could not be made or the host not resolved.`
+
+/// Everything the command line can say.
+export class Options {
+  public list: bool = false
+  /// The `--pad` text: "" for the only pad.
+  public pad: string = ""
+  public instance: int = 0
+  /// The explicit `--port`, or -1.
+  public port: int = -1
+  public host: string = "127.0.0.1"
+  public rate: int = 50
+  public offset: int = 0
+  /// The RC channels of roll, pitch, throttle, yaw.
+  public sticks: int[] = [1, 2, 3, 4]
+  public throttleLow: bool = false
+  public rudderArm: bool = false
+  public go: bool = false
+  public fakePad: string = ""
+  /// Seconds to run, or -1 for no limit.
+  public exitAfter: int = -1
+  public quiet: bool = false
+
+  /// The UDP port: the explicit one, else 5501 + 10 for each instance.
+  public portOf(): int {
+    return if (port >= 0) port else 5501 + 10 * instance
+  }
+}
+
+/// What the command line came to: an action (`run`, `list`, `help`, `version`, or `error` with an exit code and a line), and the options.
+export class Parsed {
+  public action: string = "run"
+  public code: int = 0
+  public message: string = ""
+  public options: Options = new Options()
+}
+
+function failure(code: int, message: string): Parsed {
+  const parsed = new Parsed()
+  parsed.action = "error"
+  parsed.code = code
+  parsed.message = message
+  return parsed
+}
+
+/// A whole number written in digits (no sign, no spaces), or -1 for anything else.
+export function digits(text: string): int {
+  if (text.length == 0 || text.length > 9) {
+    return -1
+  }
+  let n = 0
+  for (let i = 0; i < text.length; i++) {
+    const digit = "0123456789".indexOf(text.slice(i, i + 1))
+    if (digit < 0) {
+      return -1
+    }
+    n = n * 10 + digit
+  }
+  return n
+}
+
+/// Why an address is not one to send to, or "": a broadcast, a multicast or the "any" address of IPv4 written out, and IPv6. (A name is
+/// checked again after it was resolved: `addressProblem`.)
+export function addressProblem(address: string): string {
+  if (address.includes(":")) {
+    return "an IPv6 address: use an IPv4 address or a name"
+  }
+  const parts = address.split(".")
+  if (parts.length != 4) {
+    return ""
+  }
+  const first = digits(parts[0])
+  if (address == "255.255.255.255") {
+    return "the broadcast address: name the host that runs SITL"
+  }
+  if (address == "0.0.0.0") {
+    return "the address 0.0.0.0: name the host that runs SITL"
+  }
+  if (first >= 224 && first <= 239) {
+    return "a multicast address: name the host that runs SITL"
+  }
+  return ""
+}
+
+/// The `--sticks` list: four distinct channels 1..16, or an error line.
+function sticksOf(text: string): int[] {
+  const out: int[] = []
+  const parts = text.split(",")
+  for (let i = 0; i < parts.length; i++) {
+    const n = digits(parts[i].trim())
+    if (n < 1 || n > 16) {
+      return []
+    }
+    out.push(n)
+  }
+  return out
+}
+
+function hasDuplicates(values: int[]): bool {
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      if (values[i] == values[j]) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/// The flags that take a value, and the ones that do not.
+const WITH_VALUE = ["--pad", "--instance", "--port", "--host", "--rate", "--offset", "--sticks", "--throttle-rest", "--fake-pad", "--exit-after"]
+const WITHOUT_VALUE = ["--list", "--rudder-arm", "--go", "--quiet", "--version", "--help"]
+
+/// Applies one flag to the options; "" when it is fine, else the usage error.
+function apply(options: Options, flag: string, value: string): string {
+  if (flag == "--pad") {
+    options.pad = value
+  } else if (flag == "--host") {
+    const problem = addressProblem(value)
+    if (value.length == 0 || problem != "") {
+      return `--host ${value}: ${if (value.length == 0) "no host" else problem}`
+    }
+    options.host = value
+  } else if (flag == "--fake-pad") {
+    options.fakePad = value
+  } else if (flag == "--throttle-rest") {
+    if (value != "centre" && value != "low") {
+      return `--throttle-rest wants centre or low, not ${value}`
+    }
+    options.throttleLow = value == "low"
+  } else if (flag == "--sticks") {
+    const sticks = sticksOf(value)
+    if (sticks.length != 4) {
+      return `--sticks wants four RC channels from 1 to 16, like 1,2,3,4: not ${value}`
+    }
+    if (hasDuplicates(sticks)) {
+      return `--sticks wants four different channels: not ${value}`
+    }
+    options.sticks = sticks
+  } else {
+    return applyNumber(options, flag, value)
+  }
+  return ""
+}
+
+/// The flags whose value is a whole number, each in its range.
+function applyNumber(options: Options, flag: string, value: string): string {
+  const n = digits(value)
+  const low = if (flag == "--port") 1024 else if (flag == "--rate") 10 else if (flag == "--exit-after") 1 else 0
+  const high = if (flag == "--port") 65535 else if (flag == "--rate") 100 else if (flag == "--offset") 8 else if (flag == "--instance") 99 else 86400
+  if (n < low || n > high) {
+    return `${flag} wants a whole number from ${low} to ${high}, not ${value}`
+  }
+  if (flag == "--port") {
+    options.port = n
+  } else if (flag == "--instance") {
+    options.instance = n
+  } else if (flag == "--rate") {
+    options.rate = n
+  } else if (flag == "--offset") {
+    options.offset = n
+  } else {
+    options.exitAfter = n
+  }
+  return ""
+}
+
+/// Reads the arguments. `interactive` is whether stdin is a terminal: without one the start needs `--go`, else the start is refused
+/// (code 4).
+export function parse(args: string[], interactive: bool): Parsed {
+  const options = new Options()
+  let action = "run"
+  let i = 0
+  while (i < args.length) {
+    let flag = args[i]
+    let value = ""
+    let given = false
+    const at = flag.indexOf("=")
+    if (flag.startsWith("--") && at > 0) {
+      value = flag.slice(at + 1)
+      flag = flag.slice(0, at)
+      given = true
+    }
+    if (WITHOUT_VALUE.includes(flag)) {
+      if (given) {
+        return failure(2, `${flag} takes no value`)
+      }
+      if (flag == "--list") {
+        options.list = true
+        action = "list"
+      } else if (flag == "--rudder-arm") {
+        options.rudderArm = true
+      } else if (flag == "--go") {
+        options.go = true
+      } else if (flag == "--quiet") {
+        options.quiet = true
+      } else if (flag == "--version") {
+        action = "version"
+      } else {
+        action = "help"
+      }
+    } else if (WITH_VALUE.includes(flag)) {
+      if (!given) {
+        i += 1
+        if (i >= args.length) {
+          return failure(2, `${flag} wants a value`)
+        }
+        value = args[i]
+      }
+      const problem = apply(options, flag, value)
+      if (problem != "") {
+        return failure(2, problem)
+      }
+    } else {
+      return failure(2, `unknown option ${args[i]}`)
+    }
+    i += 1
+  }
+  if (options.portOf() > 65535) {
+    return failure(2, `--instance ${options.instance}: the port 5501 + 10 n is over 65535`)
+  }
+  if (action == "run" && !interactive && !options.go) {
+    return failure(4, "stdin is not a terminal: there is nobody to press Enter. Start it with --go (it then sends as soon as the sticks are at rest)")
+  }
+  const parsed = new Parsed()
+  parsed.action = action
+  parsed.options = options
+  return parsed
+}

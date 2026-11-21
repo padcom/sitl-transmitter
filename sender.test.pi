@@ -1,0 +1,97 @@
+// The UDP side: a receiver of our own on the loopback address; 32-byte datagrams, the destination, the cadence, the host rules.
+import { describe, it, expect } from "std/test"
+import { UdpSocket, bind } from "std/net"
+import { delay } from "std/timers"
+import { frameOfPacket } from "./packet"
+import { makeSink, resolveHost } from "./sender"
+
+class Catcher {
+  public sizes: int[] = []
+  public frames: int[][] = []
+  public from: string = ""
+
+  public async listen(receiver: UdpSocket): Promise<void> {
+    try {
+      while (true) {
+        const datagram = await receiver.receive()
+        if (datagram == null) {
+          return
+        }
+        sizes.push(datagram!.data.length)
+        frames.push(frameOfPacket(datagram!.data))
+        from = datagram!.addr.hostname
+      }
+    } catch (e: Error) {
+      // (closed under the read)
+    }
+  }
+}
+
+async function aFrameArrivesAsOneDatagramOfThirtyTwoBytes(): Promise<void> throws Error {
+  const receiver = await bind(0, "127.0.0.1")
+  const catcher = new Catcher()
+  catcher.listen(receiver)
+  const made = await makeSink("127.0.0.1", receiver.addr.port)
+  expect(made.problem).toBe("")
+  const sink = made.sink!
+  await sink.send([1000, 1500, 2000, 1500, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1100])
+  await delay(100)
+  sink.close()
+  receiver.close()
+  expect(`${catcher.sizes.length} ${catcher.sizes[0]} ${catcher.from}`).toBe("1 32 127.0.0.1")
+  expect(catcher.frames[0].join(",")).toBe("1000,1500,2000,1500,0,0,0,0,0,0,0,0,0,0,0,1100")
+  expect(sink.sent).toBe(1)
+}
+
+async function framesArriveInOrderAtAboutTheRateTheyAreSent(): Promise<void> throws Error {
+  const receiver = await bind(0, "127.0.0.1")
+  const catcher = new Catcher()
+  catcher.listen(receiver)
+  const sink = (await makeSink("127.0.0.1", receiver.addr.port)).sink!
+  for (let i = 0; i < 25; i++) {
+    await sink.send([1000 + i])
+    await delay(20)
+  }
+  await delay(100)
+  sink.close()
+  receiver.close()
+  expect(catcher.sizes.length).toBe(25)
+  expect(`${catcher.frames[0][0]} ${catcher.frames[24][0]}`).toBe("1000 1024")
+}
+
+async function aLiteralIsTakenAsItIsAndANameIsResolvedOnce(): Promise<void> throws Error {
+  const literal = await resolveHost("192.168.1.20")
+  expect(`${literal.address} ${literal.problem}`).toBe("192.168.1.20 ")
+  const local = await resolveHost("localhost")
+  expect(local.problem).toBe("")
+  expect(local.address == "127.0.0.1").toBe(true)
+}
+
+async function aHostThatCannotBeResolvedIsExitFiveWithTheName(): Promise<void> throws Error {
+  const r = await resolveHost("no-such-host.invalid")
+  expect(r.code).toBe(5)
+  expect(r.address).toBe("")
+  expect(r.problem.startsWith("the host no-such-host.invalid could not be resolved")).toBe(true)
+}
+
+async function aBroadcastOrMulticastAddressIsRefusedWithCodeTwo(): Promise<void> throws Error {
+  const a = await resolveHost("255.255.255.255")
+  expect(`${a.code} ${a.address} ${a.problem}`).toBe("2  the host 255.255.255.255 is the broadcast address: name the host that runs SITL")
+  const b = await resolveHost("232.1.2.3")
+  expect(b.code).toBe(2)
+}
+
+async function theSocketCanBeMade(): Promise<void> throws Error {
+  const made = await makeSink("127.0.0.1", 5501)
+  expect(made.problem).toBe("")
+  made.sink!.close()
+}
+
+describe("the sender", () => {
+  it("sends a frame as one datagram of 32 bytes to the destination", aFrameArrivesAsOneDatagramOfThirtyTwoBytes)
+  it("keeps the order of the frames and the rate they are sent at", framesArriveInOrderAtAboutTheRateTheyAreSent)
+  it("takes an address as it is and resolves a name once", aLiteralIsTakenAsItIsAndANameIsResolvedOnce)
+  it("says exit 5 and the name for a host that cannot be resolved", aHostThatCannotBeResolvedIsExitFiveWithTheName)
+  it("refuses a broadcast or multicast address (exit 2)", aBroadcastOrMulticastAddressIsRefusedWithCodeTwo)
+  it("makes its socket", theSocketCanBeMade)
+})

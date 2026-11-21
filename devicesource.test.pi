@@ -1,0 +1,120 @@
+// A real pad through pico-gamepad's fake system: the choice among pads, opening the SAME id again after a loss, and what a reading is.
+import { describe, it, expect } from "std/test"
+import { FakeSystem, fakeInfo, listPads } from "padcom/pico-gamepad"
+import { DeviceSource, listLine, pickPad } from "./devicesource"
+
+const RADIO = "/dev/input/event11"
+const OTHER = "/dev/input/event12"
+
+function two(): FakeSystem {
+  const system = new FakeSystem()
+  system.plug(fakeInfo("OpenTX Radiomaster TX16S Joystick", 0x1209, 0x4f54, 8, 24, "00000000001B", "usb-0000:00:03.0-2.1/input0", RADIO))
+  system.plug(fakeInfo("Xbox Controller", 0x045e, 0x028e, 6, 11, "", "usb-0000:00:03.0-2.2/input0", OTHER))
+  return system
+}
+
+async function theOnlyPadIsTheDefault(): Promise<void> throws Error {
+  const system = new FakeSystem()
+  system.plug(fakeInfo("OpenTX Radiomaster TX16S Joystick", 0x1209, 0x4f54, 8, 24, "00000000001B", "usb-0000:00:03.0-2.1/input0", RADIO))
+  const pick = pickPad(await listPads(system), "")
+  expect(`${pick.index} ${pick.problem} ${pick.code}`).toBe("0  0")
+}
+
+async function severalPadsWithoutAChoiceIsCodeTwo(): Promise<void> throws Error {
+  const pick = pickPad(await listPads(two()), "")
+  expect(`${pick.index} ${pick.code}`).toBe("-1 2")
+  expect(pick.problem.startsWith("there is more than one pad")).toBe(true)
+}
+
+async function noPadsIsCodeThree(): Promise<void> throws Error {
+  const pick = pickPad(await listPads(new FakeSystem()), "")
+  expect(`${pick.index} ${pick.code}`).toBe("-1 3")
+}
+
+async function aPadIsChosenByIndexByExactIdOrByAPartOfItsName(): Promise<void> throws Error {
+  const pads = await listPads(two())
+  expect(pickPad(pads, "1").index).toBe(1)
+  expect(pickPad(pads, "1209:4f54#00000000001B").index).toBe(0)
+  expect(pickPad(pads, "tx16s").index).toBe(0)
+  expect(pickPad(pads, "XBOX").index).toBe(1)
+  const none = pickPad(pads, "nothing")
+  expect(`${none.index} ${none.code} ${none.problem}`).toBe("-1 2 no pad matches nothing")
+  expect(pickPad(pads, "5").code).toBe(2)
+}
+
+async function aTextThatMatchesSeveralPadsIsCodeTwo(): Promise<void> throws Error {
+  const system = two()
+  system.plug(fakeInfo("Xbox Controller 2", 0x045e, 0x0b12, 6, 11, "", "usb-0000:00:03.0-2.3/input0", "/dev/input/event13"))
+  const pick = pickPad(await listPads(system), "xbox")
+  expect(`${pick.index} ${pick.code} ${pick.problem}`).toBe("-1 2 xbox matches 2 pads: use the index or the exact id")
+}
+
+async function aListLineHasTheIndexTheNameTheIdThePathAndTheSizes(): Promise<void> throws Error {
+  const pads = await listPads(two())
+  expect(listLine(0, pads[0])).toBe("0: OpenTX Radiomaster TX16S Joystick  id 1209:4f54#00000000001B  /dev/input/event11  8 axes, 24 buttons")
+}
+
+async function aReadingIsTheAxesAndButtonsOfTheDevice(): Promise<void> throws Error {
+  const system = two()
+  const pads = await listPads(system)
+  const source = new DeviceSource(pads[0], system)
+  expect(await source.open()).toBe("")
+  expect(`${source.name()} ${source.id()} ${source.axes()} ${source.buttons()}`).toBe("OpenTX Radiomaster TX16S Joystick 1209:4f54#00000000001B 8 24")
+  const device = system.device(RADIO)
+  device.set(0, 2047)
+  device.press(3)
+  const reading = source.read(0)!
+  expect(`${reading.axes.length} ${reading.buttons.length} ${reading.axes[0] > 0.99} ${reading.buttons[3]} ${reading.buttons[2]}`).toBe("8 24 true true false")
+}
+
+async function anUnpluggedPadReadsNullAndTheSameIdIsOpenedAgainWhenItIsBack(): Promise<void> throws Error {
+  const system = two()
+  const pads = await listPads(system)
+  const source = new DeviceSource(pads[0], system)
+  await source.open()
+  system.unplug(RADIO)
+  expect(source.read(0) == null).toBe(true)
+  expect(await source.open()).toBe("NO_PAD")
+  // (plugged in again: at another path, the same id)
+  system.plug(fakeInfo("OpenTX Radiomaster TX16S Joystick", 0x1209, 0x4f54, 8, 24, "00000000001B", "usb-0000:00:03.0-2.1/input0", "/dev/input/event15"))
+  expect(await source.open()).toBe("")
+  expect(source.read(0) != null).toBe(true)
+}
+
+async function aDifferentPadIsNeverTakenOverForTheOneThatWentAway(): Promise<void> throws Error {
+  const system = two()
+  const pads = await listPads(system)
+  const source = new DeviceSource(pads[0], system)
+  await source.open()
+  system.unplug(RADIO)
+  expect(source.read(0) == null).toBe(true)
+  // (the other pad is still plugged in: it is not the one that was chosen)
+  expect(await source.open()).toBe("NO_PAD")
+  expect(source.read(0) == null).toBe(true)
+}
+
+async function aPadThatIsRefusedSaysPermissionDeniedAndOpensOnceTheAccessComes(): Promise<void> throws Error {
+  const system = two()
+  system.denyOpens = 2
+  const pads = await listPads(system)
+  const source = new DeviceSource(pads[0], system)
+  expect(await source.open()).toBe("PERMISSION_DENIED")
+  expect(await source.open()).toBe("PERMISSION_DENIED")
+  expect(await source.open()).toBe("")
+}
+
+describe("choosing a pad", () => {
+  it("takes the only pad when none is named", theOnlyPadIsTheDefault)
+  it("asks for a choice (2) when there are several", severalPadsWithoutAChoiceIsCodeTwo)
+  it("is code 3 with no pad at all", noPadsIsCodeThree)
+  it("takes an index, the exact id, or a part of the name in any case", aPadIsChosenByIndexByExactIdOrByAPartOfItsName)
+  it("refuses a text that matches several", aTextThatMatchesSeveralPadsIsCodeTwo)
+  it("lists a pad with its index, name, id, path and sizes", aListLineHasTheIndexTheNameTheIdThePathAndTheSizes)
+})
+
+describe("a real pad", () => {
+  it("reads the axes and buttons of the device", aReadingIsTheAxesAndButtonsOfTheDevice)
+  it("reads null once unplugged and is opened again, by the same id, at its new path", anUnpluggedPadReadsNullAndTheSameIdIsOpenedAgainWhenItIsBack)
+  it("never takes another pad for the one that went", aDifferentPadIsNeverTakenOverForTheOneThatWentAway)
+  it("says PERMISSION_DENIED until the access comes", aPadThatIsRefusedSaysPermissionDeniedAndOpensOnceTheAccessComes)
+})

@@ -1,9 +1,80 @@
-// sitl-transmitter: a pass-through virtual transmitter for ArduPilot SITL (see README.md). This is the skeleton (T0): it prints its
-// version. The pad, the packet, the start gate and the sender follow in T1 and T2.
-import { args } from "std/process"
-import { versionLine } from "./version"
+// sitl-transmitter: a pass-through virtual transmitter for ArduPilot SITL (see README.md). This file only hands the real world to
+// `app.pi`: the arguments, the terminal, the clock, stdout and stderr, and the keyboard and the signals as a `Control`.
+import { args, exit, stderr, stdin } from "std/process"
+import { delay } from "std/timers"
+import { monotonicUs } from "padcom/pico-gamepad"
+import { execute } from "./app"
+import { Control, Out, Time } from "./runner"
+import { block, isTerminal, terminated } from "./signals"
 
-println(versionLine())
-if (args.length > 0 && args[0] != "--version") {
-  println("not implemented yet: only --version works (the skeleton)")
+class Stdout implements Out {
+  public line(text: string): void {
+    println(text)
+  }
 }
+
+class Stderr implements Out {
+  public line(text: string): void {
+    stderr.writeText(text + "\n")
+  }
+}
+
+class RealTime implements Time {
+  public now(): int {
+    return (monotonicUs() / 1000) as int
+  }
+
+  public async wait(ms: int): Promise<void> throws Error {
+    await delay(ms)
+  }
+}
+
+/// What is typed: `q` ends the run, anything else is Enter (go); the end of the input ends it too (only when there is a terminal: a pipe
+/// or /dev/null is not somebody who left).
+async function listen(control: Control): Promise<void> {
+  try {
+    while (!control.quit) {
+      const chunk = await stdin.read()
+      if (chunk == null) {
+        control.quit = true
+        return
+      }
+      const typed = new TextDecoder().decode(chunk).trim()
+      if (typed == "q") {
+        control.quit = true
+      } else {
+        control.go = true
+      }
+    }
+  } catch (e: Error) {
+    control.quit = true
+  }
+}
+
+/// Polls for SIGINT, SIGTERM and SIGHUP (blocked, see signals.pi): the run ends with its neutral frame.
+async function watchSignals(control: Control): Promise<void> {
+  try {
+    while (!control.quit) {
+      await delay(20)
+      if (terminated()) {
+        control.quit = true
+      }
+    }
+  } catch (e: Error) {
+    control.quit = true
+  }
+}
+
+async function main(): Promise<void> throws Error {
+  // (first of all, before anything makes a thread: the signals are held back, so that a Ctrl-C ends the run with its neutral frame)
+  block()
+  const control = new Control()
+  const interactive = isTerminal()
+  if (interactive) {
+    listen(control)
+  }
+  watchSignals(control)
+  exit((await execute(args, interactive, new Stdout(), new Stderr(), new RealTime(), control)) as i32)
+}
+
+await main()

@@ -1,7 +1,7 @@
 // The start gate and the run states (section 6 of the plan), driven by a clock the test moves.
 import { describe, it, expect } from "std/test"
 import { Layout } from "./channels"
-import { BAND, Config, GATE, LATE_MS, Machine, READS, READY, Reading, SENDING, WAITING, neutralFrame, signed } from "./gate"
+import { BAND, Config, GATE, LATE_MS, Machine, lateFor, READS, READY, Reading, SENDING, WAITING, neutralFrame, signed } from "./gate"
 import { Clock, axesAt, config, released, restingRadio, sendingMachine } from "./testing"
 
 function text(frame: int[]): string {
@@ -140,6 +140,25 @@ function aStickOnAButtonOrNothingIsRefusedByName(): void {
   expect(atTheGate().problem()).toBe("")
 }
 
+function aReadingThatIsShorterThanTheLayoutIsOffTheMiddleNotZero(): void {
+  const clock = new Clock()
+  const machine = atTheGate()
+  const short = new Reading([0.0, 0.0], released(24))
+  expect(machine.tick(clock.advance(2000), short).message).toBe("throttle is missing from the reading (the pad reports 2 axes)")
+  for (let i = 0; i < 30; i++) {
+    machine.tick(clock.advance(20), short)
+  }
+  expect(`${machine.state} ${machine.good} ${machine.frames}`).toBe("gate 0 0")
+}
+
+function aReadingThatLosesAnAxisWhileSendingIsAGap(): void {
+  const clock = new Clock()
+  const machine = sendingMachine(clock)
+  const step = machine.tick(clock.advance(20), new Reading([0.0, 0.0, 0.0], released(24)))
+  expect(step.kind).toBe("neutral")
+  expect(machine.state).toBe(GATE)
+}
+
 // ---- the frames ----
 
 function theYawIsHeldToEightyPercentWhileTheThrottleIsAtTheBottom(): void {
@@ -208,6 +227,10 @@ function aTickExactlyOnTheLimitIsNotLate(): void {
   expect(machine.tick(clock.advance(LATE_MS), restingRadio()).kind).toBe("frame")
 }
 
+function theLimitIsThreePeriodsWhereThePeriodIsLong(): void {
+  expect(`${lateFor(10)} ${lateFor(20)} ${lateFor(33)} ${lateFor(34)} ${lateFor(100)}`).toBe("100 100 100 102 300")
+}
+
 function anUnpluggedPadGivesOneNeutralFrameThenSilence(): void {
   const clock = new Clock()
   const machine = sendingMachine(clock)
@@ -265,6 +288,8 @@ describe("the gate", () => {
   it("says which stick is off once a second", theGateSaysWhichStickIsOffOnceASecond)
   it("never says a small reading as +0.00", aSmallReadingIsNeverSaidAsPlusZero)
   it("refuses a stick that is on a button or on nothing, naming it", aStickOnAButtonOrNothingIsRefusedByName)
+  it("takes a reading shorter than the layout for off the middle, never for 0.0", aReadingThatIsShorterThanTheLayoutIsOffTheMiddleNotZero)
+  it("takes an axis lost while sending for a gap: neutral, and the gate again", aReadingThatLosesAnAxisWhileSendingIsAGap)
 })
 
 describe("the frames", () => {
@@ -282,6 +307,7 @@ describe("the neutral frame", () => {
 describe("a gap or a loss", () => {
   it("gives one neutral frame for a late tick, and the gate again", aLateTickGivesOneNeutralFrameAndTheGateAgain)
   it("does not take a tick exactly on the limit for late", aTickExactlyOnTheLimitIsNotLate)
+  it("allows three periods where the period is longer than 33 ms", theLimitIsThreePeriodsWhereThePeriodIsLong)
   it("gives one neutral frame for a pad that went, then silence", anUnpluggedPadGivesOneNeutralFrameThenSilence)
   it("takes a failed read for a pad that went", aReadThatFailsIsTheSameAsAPadThatIsGone)
   it("runs the gate again after a replug, without Enter", aReplugRunsTheGateAgainAndDoesNotAskForEnterAgain)

@@ -19,11 +19,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: linux-x64, runner: ubuntu-24.04 }
-          - { target: linux-arm64, runner: ubuntu-24.04-arm }
-          - { target: macos-arm64, runner: macos-15 }
-          - { target: windows-x64, runner: windows-2025 }
-          - { target: windows-arm64, runner: windows-11-arm }
+          - { target: linux-x64, runner: ubuntu-24.04, linux: true }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm, linux: true }
+          - { target: macos-arm64, runner: macos-15, linux: false }
+          - { target: windows-x64, runner: windows-2025, linux: false }
+          - { target: windows-arm64, runner: windows-11-arm, linux: false }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     defaults:
@@ -61,10 +61,29 @@ jobs:
           pico --version
           pico fmt --check .
       - name: Lint
+        if: ${{ matrix.linux }}
         run: pico lint .
+      # Off Linux the signal calls (libc's sigprocmask, isatty) can't be checked: signals.linux.pi names C calls that other systems lack;
+      # there signals.pi stands in (nothing blocked, stdin not a terminal), and that is what is linted and built.
+      - name: Lint (without the Linux-only files)
+        if: ${{ !matrix.linux }}
+        run: |
+          echo "::warning::signals.linux.pi and signals.linux.test.pi aren't linted on ${{ matrix.target }}: Linux only."
+          # (every .pi file except the *.linux.* ones: a new file is picked up by itself)
+          files=$(ls *.pi | grep -v '\.linux\.')
+          pico lint $files
       - name: Tests
+        if: ${{ matrix.linux }}
         run: |
           pico test . | tee "$RUNNER_TEMP/test.log"
+          bash .github/tests-ran.sh "$RUNNER_TEMP/test.log"
+      - name: Tests (without the Linux-only files)
+        if: ${{ !matrix.linux }}
+        run: |
+          echo "::warning::signals.linux.test.pi is skipped on ${{ matrix.target }}: it needs Linux."
+          # (every *.test.pi except the *.linux.* ones: a new test file is picked up by itself)
+          files=$(ls *.test.pi | grep -v '\.linux\.')
+          pico test $files | tee "$RUNNER_TEMP/test.log"
           bash .github/tests-ran.sh "$RUNNER_TEMP/test.log"
       - name: The program builds
         run: pico build main.pi -o "$RUNNER_TEMP/sitl-transmitter${{ startsWith(matrix.target, 'windows') && '.exe' || '' }}"

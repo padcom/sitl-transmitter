@@ -1,0 +1,21 @@
+// Signals and the terminal check where the program cannot run a pad (it has no gamepad backend outside Linux): nothing is blocked, nothing
+// is ever pending, and stdin is not taken for a terminal (so a start needs --go). The same names as signals.linux.pi.
+export const SIGHUP: int = 1
+export const SIGINT: int = 2
+export const SIGTERM: int = 15
+
+export function isTerminal(): bool {
+  return false
+}
+
+export function block(): bool {
+  return false
+}
+
+export function terminated(): bool {
+  return false
+}
+
+export function signalSelf(_signum: int): bool {
+  return false
+}
