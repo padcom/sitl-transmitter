@@ -1,0 +1,8 @@
+// The program's name and version, in one place (what `--version` says; keep it equal to project.json's).
+export const NAME = "sitl-transmitter"
+export const VERSION = "0.0.1"
+
+/// The line `--version` prints.
+export function versionLine(): string {
+  return `${NAME} ${VERSION}`
+}

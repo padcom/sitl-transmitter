@@ -1,0 +1,9 @@
+// sitl-transmitter: a pass-through virtual transmitter for ArduPilot SITL (see README.md). This is the skeleton (T0): it prints its
+// version. The pad, the packet, the start gate and the sender follow in T1 and T2.
+import { args } from "std/process"
+import { versionLine } from "./version"
+
+println(versionLine())
+if (args.length > 0 && args[0] != "--version") {
+  println("not implemented yet: only --version works (the skeleton)")
+}

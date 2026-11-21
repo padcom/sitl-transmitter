@@ -1,0 +1,9 @@
+{
+  "name": "padcom/sitl-transmitter",
+  "version": "0.0.1",
+  "entry": "main.pi",
+  "workspace": ["../pico-gamepad"],
+  "dependencies": {
+    "padcom/pico-gamepad": "0.0.1"
+  }
+}

@@ -1,0 +1,5 @@
+target/
+*.dbg
+project.lock
+sitl-transmitter
+sitl-transmitter.exe

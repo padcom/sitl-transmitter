@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # The Pico the tests were written and run with: a literal, like pico-gamepad, pico-mavlink and pico-serialport.
+  PICO_VERSION: 0.5.1
+
+jobs:
+  ci:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64, runner: ubuntu-24.04 }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm }
+          - { target: macos-arm64, runner: macos-15 }
+          - { target: windows-x64, runner: windows-2025 }
+          - { target: windows-arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        # Explicitly bash, which GitHub runs with -eo pipefail: a failing test isn't hidden by tee.
+        shell: bash
+        # This repository is checked out next to its sibling `pico-gamepad` (project.json's `workspace` says `../pico-gamepad`).
+        working-directory: sitl-transmitter
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sitl-transmitter
+      - uses: actions/checkout@v4
+        with:
+          repository: padcom/pico-gamepad
+          path: pico-gamepad
+      - name: Install the pinned Pico
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Fails the job if the release is missing: nothing below is optional.
+        run: |
+          v=$PICO_VERSION
+          case "${{ matrix.target }}" in windows-*) archive=zip ;; *) archive=tar.gz ;; esac
+          gh release download "v$v" -R padcom/pico-lang -p "pico-$v-${{ matrix.target }}.$archive" -D "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/pico"
+          if [ "$archive" = zip ]; then
+            unzip -q "$RUNNER_TEMP/pico-$v-${{ matrix.target }}.zip" -d "$RUNNER_TEMP/pico"
+            cygpath -w "$(dirname "$(find "$RUNNER_TEMP/pico" -type f -name pico.exe | head -1)")" >> "$GITHUB_PATH"
+          else
+            tar -xzf "$RUNNER_TEMP/pico-$v-${{ matrix.target }}.tar.gz" -C "$RUNNER_TEMP/pico"
+            dirname "$(find "$RUNNER_TEMP/pico" -type f -name pico -perm -u+x | head -1)" >> "$GITHUB_PATH"
+          fi
+      - name: Format
+        run: |
+          pico --version
+          pico fmt --check .
+      - name: Lint
+        run: pico lint .
+      - name: Tests
+        run: |
+          pico test . | tee "$RUNNER_TEMP/test.log"
+          bash .github/tests-ran.sh "$RUNNER_TEMP/test.log"
+      - name: The program builds
+        run: pico build main.pi -o "$RUNNER_TEMP/sitl-transmitter${{ startsWith(matrix.target, 'windows') && '.exe' || '' }}"
