@@ -53,12 +53,17 @@ function theRangesAreChecked(): void {
   expect(errorOf(["--exit-after", "0"])).toBe("error 2: --exit-after wants a whole number from 1 to 86400, not 0")
   expect(errorOf(["--rate", "fast"])).toBe("error 2: --rate wants a whole number from 10 to 100, not fast")
   expect(errorOf(["--rate", "-5"])).toBe("error 2: --rate wants a whole number from 10 to 100, not -5")
-  expect(errorOf(["--instance", "100"])).toBe("error 2: --instance wants a whole number from 0 to 99, not 100")
+  expect(errorOf(["--instance", "6004"])).toBe("error 2: --instance wants a whole number from 0 to 6003, not 6004")
 }
 
-function anInstanceWhosePortWouldPassTheEndIsRefused(): void {
+function anInstanceIsAcceptedWhilePortStaysUnder65535(): void {
   expect(ok(["--instance", "99"])).toBe("run 0")
   expect(parse(["--instance", "99"], true).options.portOf()).toBe(6491)
+  expect(parse(["--instance", "1000"], true).options.portOf()).toBe(15501)
+  expect(ok(["--instance", "6003"])).toBe("run 0")
+  expect(parse(["--instance", "6003"], true).options.portOf()).toBe(65531)
+  expect(errorOf(["--instance", "6004"])).toBe("error 2: --instance wants a whole number from 0 to 6003, not 6004")
+  expect(errorOf(["--instance", "-1"])).toBe("error 2: --instance wants a whole number from 0 to 6003, not -1")
 }
 
 function sticksOutsideOneToSixteenAndDuplicatesAreRefused(): void {
@@ -126,7 +131,7 @@ describe("the command line", () => {
   it("takes --flag=value as well", theFlagMayBeWrittenWithAnEqualsSign)
   it("lets an explicit --port win over --instance", anExplicitPortWinsOverTheInstance)
   it("checks every range", theRangesAreChecked)
-  it("keeps the port of the highest instance under 65535", anInstanceWhosePortWouldPassTheEndIsRefused)
+  it("takes an instance up to 6003 (port 65531) and refuses 6004", anInstanceIsAcceptedWhilePortStaysUnder65535)
   it("refuses --sticks outside 1..16, of the wrong count, and with duplicates", sticksOutsideOneToSixteenAndDuplicatesAreRefused)
   it("takes the throttle rest as centre or low", theThrottleRestIsCentreOrLow)
   it("takes --host as an IPv4 address or a name, and refuses a broadcast, a multicast, 0.0.0.0 and IPv6", aHostIsAnIpOrANameButNotABroadcastOrMulticast)
