@@ -92,6 +92,16 @@ export function signed(v: f64): string {
   return `${if (v < 0.0) "-" else "+"}${whole}.${fraction}`
 }
 
+/// The four sticks as the gate sees them ("roll +0.01 pitch +0.00 throttle -1.00 yaw +0.00"); "?" for one that is missing.
+export function sticksText(config: Config, axes: f64[]): string {
+  let out = ""
+  for (let i = 0; i < STICKS.length; i++) {
+    const index = config.layout.axisOf(config.sticks[i])
+    out += `${if (i > 0) " " else ""}${STICKS[i]} ${if (index >= 0 && index < axes.length) signed(axes[index]) else "?"}`
+  }
+  return out
+}
+
 /// The frame of "no input": roll, pitch and yaw in the middle, the throttle in the middle (it rests there) or at the bottom (it rests
 /// low), every other channel 0 (ignore: the switches keep their last position, as on a radio).
 export function neutralFrame(config: Config): int[] {
@@ -115,6 +125,8 @@ export class Machine {
   public good: int = 0
   public lastMessageAt: int = -1000000
   public lastFrameAt: int = 0
+  /// What blocks the gate right now ("roll is not at the middle: +0.72"), or "" when nothing does: for the status line.
+  public off: string = ""
 
   constructor(config: Config) {
     this.config = config
@@ -213,6 +225,7 @@ export class Machine {
       return new Step("refused", [], refusal)
     }
     const off = offStick(reading.axes)
+    this.off = off
     if (off != "") {
       good = 0
       if (now - lastMessageAt >= MESSAGE_MS) {

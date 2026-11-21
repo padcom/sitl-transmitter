@@ -16,17 +16,17 @@ function theDefaultsAreThoseOfThePlan(): void {
   const p = parse([], true)
   const o = p.options
   expect(`${p.action} ${p.code}`).toBe("run 0")
-  expect(`${o.pad}|${o.instance}|${o.port}|${o.portOf()}|${o.host}|${o.rate}|${o.offset}|${o.sticks.join(",")}|${o.throttleLow}|${o.rudderArm}|${o.go}|${o.fakePad}|${o.exitAfter}|${o.quiet}|${o.list}`).toBe(
-    "|0|-1|5501|127.0.0.1|50|0|1,2,3,4|false|false|false||-1|false|false",
+  expect(`${o.pad}|${o.instance}|${o.port}|${o.portOf()}|${o.host}|${o.rate}|${o.offset}|${o.sticks.join(",")}|${o.throttleLow}|${o.rudderArm}|${o.go}|${o.fakePad}|${o.exitAfter}|${o.quiet}|${o.verbose}|${o.list}`).toBe(
+    "|0|-1|5501|127.0.0.1|50|0|1,2,3,4|false|false|false||-1|false|false|false",
   )
 }
 
 function everyFlagIsRead(): void {
-  const p = parse(["--pad", "1209:4f54", "--instance", "2", "--host", "192.168.1.20", "--rate", "25", "--offset", "3", "--sticks", "2,1,4,3", "--throttle-rest", "low", "--rudder-arm", "--go", "--fake-pad", "x.jsonl", "--exit-after", "30", "--quiet"], false)
+  const p = parse(["--pad", "1209:4f54", "--instance", "2", "--host", "192.168.1.20", "--rate", "25", "--offset", "3", "--sticks", "2,1,4,3", "--throttle-rest", "low", "--rudder-arm", "--go", "--fake-pad", "x.jsonl", "--exit-after", "30", "--quiet", "--verbose"], false)
   const o = p.options
   expect(`${p.action} ${p.code}`).toBe("run 0")
-  expect(`${o.pad}|${o.instance}|${o.portOf()}|${o.host}|${o.rate}|${o.offset}|${o.sticks.join(",")}|${o.throttleLow}|${o.rudderArm}|${o.go}|${o.fakePad}|${o.exitAfter}|${o.quiet}`).toBe(
-    "1209:4f54|2|5521|192.168.1.20|25|3|2,1,4,3|true|true|true|x.jsonl|30|true",
+  expect(`${o.pad}|${o.instance}|${o.portOf()}|${o.host}|${o.rate}|${o.offset}|${o.sticks.join(",")}|${o.throttleLow}|${o.rudderArm}|${o.go}|${o.fakePad}|${o.exitAfter}|${o.quiet}|${o.verbose}`).toBe(
+    "1209:4f54|2|5521|192.168.1.20|25|3|2,1,4,3|true|true|true|x.jsonl|30|true|true",
   )
 }
 
@@ -115,7 +115,7 @@ function withoutATerminalAStartNeedsGo(): void {
 }
 
 function theUsageNamesEveryFlagAndTheExitCodes(): void {
-  for (const flag of ["--list", "--pad", "--instance", "--port", "--host", "--rate", "--offset", "--sticks", "--throttle-rest", "--rudder-arm", "--go", "--fake-pad", "--exit-after", "--quiet", "--version", "--help"]) {
+  for (const flag of ["--list", "--pad", "--instance", "--port", "--host", "--rate", "--offset", "--sticks", "--throttle-rest", "--rudder-arm", "--go", "--fake-pad", "--exit-after", "--quiet", "--verbose", "--version", "--help"]) {
     expect(USAGE.includes(flag)).toBe(true)
   }
   expect(USAGE.includes("5 the UDP socket could not be made or the host not resolved")).toBe(true)
