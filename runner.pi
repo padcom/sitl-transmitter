@@ -171,7 +171,7 @@ export async function run(options: Options, source: Source, sink: Sink, clock: T
         out.line(statusLine(machine, source.name(), sticks, last, destination))
       }
       if (options.verbose) {
-        out.line(`packets: ${machine.frames} sent, ${if (machine.frames > 0) "the last one CH1..CH8 " + channels(last) else "none yet (" + machine.state + ")"}`)
+        out.line(`packets: ${machine.frames} sent, ${if (machine.frames > 0) "the last one CH1..CH8 " + channels(last) + " (if SITL does not react: is it listening on " + destination + "? check with: ss -ulpn | grep arducopter)" else "none yet (" + machine.state + ")"}`)
       }
     }
     next += period

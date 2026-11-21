@@ -292,6 +292,7 @@ async function verbosePrintsTheFirstEightChannelsOfTheLastPacketOnceASecond(): P
   }
   expect(verbose).toBe(3)
   expect(last.includes("sent, the last one CH1..CH8 1500 1500 1500 1500 1500 1500 1500 1500")).toBe(true)
+  expect(last.includes("is it listening on 127.0.0.1:5501? check with: ss -ulpn | grep arducopter")).toBe(true)
   // (at a gate that never passes, it says that nothing was sent)
   const stuck = new Run()
   const blocked = goOptions(2)
