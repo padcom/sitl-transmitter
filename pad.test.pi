@@ -1,0 +1,33 @@
+// The package this program reads the pad with resolves (the sibling `../pico-gamepad`), and its fake system is what the tests of the
+// next stories read a radio through: a TX16S (8 axes, 24 buttons) is listed, opened and read without hardware.
+import { describe, it, expect } from "std/test"
+import { FakeSystem, fakeInfo, listPads, openPad } from "padcom/pico-gamepad"
+
+const PATH = "/dev/input/event11"
+
+function radio(): FakeSystem {
+  const system = new FakeSystem()
+  system.plug(fakeInfo("OpenTX Radiomaster TX16S Joystick", 0x1209, 0x4f54, 8, 24, "00000000001B", "usb-0000:00:03.0-2.1/input0", PATH))
+  return system
+}
+
+async function theFakeRadioIsListedWithItsAxesAndButtons(): Promise<void> throws Error {
+  const pads = await listPads(radio())
+  expect(pads.length).toBe(1)
+  expect(`${pads[0].axisCodes.length} ${pads[0].buttonCodes.length}`).toBe("8 24")
+}
+
+async function aStateIsWhatTheFakeDeviceSays(): Promise<void> throws Error {
+  const system = radio()
+  const pad = await openPad((await listPads(system))[0], system)
+  system.device(PATH).set(0, 2047)
+  const s = pad.state()
+  expect(s.axes.length).toBe(8)
+  expect(s.axes[0] > 0.99).toBe(true)
+  pad.close()
+}
+
+describe("the pad package", () => {
+  it("lists the fake radio with its axes and buttons", theFakeRadioIsListedWithItsAxesAndButtons)
+  it("reads what the fake device says", aStateIsWhatTheFakeDeviceSays)
+})
