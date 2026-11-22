@@ -10,7 +10,7 @@ permissions:
 
 env:
   # The Pico the tests were written and run with: a literal, like pico-gamepad, pico-mavlink and pico-serialport.
-  PICO_VERSION: 0.5.1
+  PICO_VERSION: 0.6.0
 
 jobs:
   ci:

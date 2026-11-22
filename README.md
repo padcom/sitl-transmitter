@@ -11,7 +11,7 @@ and it knows nothing of the vehicle: not its mode, not whether it is armed or on
 
 ## Build
 
-It expects `pico-gamepad` next to this folder (`project.json`'s `workspace` says `../pico-gamepad`), and `pico` 0.5.1 or later on the
+It expects `pico-gamepad` next to this folder (`project.json`'s `workspace` says `../pico-gamepad`), and `pico` 0.6.0 or later on the
 `PATH`:
 
 ```
