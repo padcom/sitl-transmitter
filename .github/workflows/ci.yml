@@ -10,7 +10,7 @@ permissions:
 
 env:
   # The Pico the tests were written and run with: a literal, like pico-gamepad, pico-mavlink and pico-serialport.
-  PICO_VERSION: 0.8.0
+  PICO_VERSION: 0.10.1
 
 jobs:
   ci:
@@ -30,16 +30,9 @@ jobs:
       run:
         # Explicitly bash, which GitHub runs with -eo pipefail: a failing test isn't hidden by tee.
         shell: bash
-        # This repository is checked out next to its sibling `pico-gamepad` (project.json's `workspace` says `../pico-gamepad`).
-        working-directory: sitl-transmitter
     steps:
+      # (pico fetches pico-gamepad and pico-commander itself, at the tags project.json pins)
       - uses: actions/checkout@v4
-        with:
-          path: sitl-transmitter
-      - uses: actions/checkout@v4
-        with:
-          repository: padcom/pico-gamepad
-          path: pico-gamepad
       - name: Install the pinned Pico
         env:
           GH_TOKEN: ${{ github.token }}

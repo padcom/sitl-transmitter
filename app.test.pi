@@ -87,7 +87,7 @@ async function aRunSendsRealDatagramsToTheReceiverAndEndsWithTheNeutralFrameTwic
 async function helpAndVersionAndTheListAreExitZero(): Promise<void> throws Error {
   const help = await exec(["--help"], true)
   expect(help.code).toBe(0)
-  expect(help.out.has("usage: sitl-transmitter")).toBe(true)
+  expect(help.out.has("Usage: sitl-transmitter [options]")).toBe(true)
   const version = await exec(["--version"], false)
   expect(`${version.code} ${version.out.said[0]}`).toBe("0 sitl-transmitter 0.0.1")
   const list = await exec(["--list"], false)
@@ -100,8 +100,8 @@ async function helpAndVersionAndTheListAreExitZero(): Promise<void> throws Error
 async function aUsageErrorIsCodeTwoWithTheUsage(): Promise<void> throws Error {
   const r = await exec(["--rate", "5"], true)
   expect(r.code).toBe(2)
-  expect(r.err.has("--rate wants a whole number from 10 to 100, not 5")).toBe(true)
-  expect(r.err.has("usage: sitl-transmitter")).toBe(true)
+  expect(r.err.has("error: option '--rate <hz>' argument '5' is invalid. It wants a whole number from 10 to 100.")).toBe(true)
+  expect(r.err.has("(sitl-transmitter --help lists the options)")).toBe(true)
 }
 
 async function withoutATerminalAndWithoutGoTheStartIsRefused(): Promise<void> throws Error {
@@ -151,7 +151,7 @@ async function aFakePadThatIsMissingOrWrongIsCodeTwo(): Promise<void> throws Err
 describe("the program", () => {
   it("sends real datagrams to a receiver and ends with the neutral frame twice", aRunSendsRealDatagramsToTheReceiverAndEndsWithTheNeutralFrameTwice)
   it("answers --help, --version and --list with 0", helpAndVersionAndTheListAreExitZero)
-  it("exits 2 with the usage on a usage error", aUsageErrorIsCodeTwoWithTheUsage)
+  it("exits 2 with the error and a hint on a usage error", aUsageErrorIsCodeTwoWithTheUsage)
   it("refuses to start with no terminal and no --go (4)", withoutATerminalAndWithoutGoTheStartIsRefused)
   it("exits 3 with no pad, and 2 with several pads or none that matches", noPadIsCodeThreeAndSeveralPadsWithoutPadIsCodeTwoWithTheList)
   it("exits 5 with a clear message for a host that cannot be resolved", aHostThatCannotBeResolvedIsCodeFiveWithAClearMessage)

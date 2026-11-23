@@ -11,8 +11,8 @@ and it knows nothing of the vehicle: not its mode, not whether it is armed or on
 
 ## Build
 
-It expects `pico-gamepad` next to this folder (`project.json`'s `workspace` says `../pico-gamepad`), and `pico` 0.8.0 or later on the
-`PATH`:
+It needs `pico` 0.10.1 or later on the `PATH`; `pico` fetches the two dependencies, [pico-gamepad](https://github.com/padcom/pico-gamepad)
+and [pico-commander](https://github.com/padcom/pico-commander) (which reads the command line), at the tags `project.json` pins:
 
 ```
 pico build main.pi -o sitl-transmitter
@@ -124,6 +124,9 @@ that it has RC input (or watch the channels in the app's Setup > Radio).
 
 ## Options
 
+The command line is read by pico-commander, so it behaves as a commander.js program does: `--flag=value` works too, a misspelt
+option is answered with "(Did you mean …?)", and `-h`/`--help` shows the help (as wide as the terminal).
+
 ```
 --list                      list the pads and exit
 --pad <n|id|text>           the list index, the exact id, or a part of the name (default: the only pad)
@@ -133,13 +136,14 @@ that it has RC input (or watch the channels in the app's Setup > Radio).
 --rate <hz>                 send rate 10..100 (default 50)
 --offset <n>                channel offset 0..8 (default 0)
 --sticks <r,p,t,y>          the RC channels of roll, pitch, throttle, yaw (default 1,2,3,4; four different, 1..16)
---throttle-rest centre|low  where the throttle rests (default centre)
+--throttle-rest <rest>      centre or low: where the throttle rests (default centre)
 --rudder-arm                lift the yaw hold
 --go                        no "press Enter"
 --fake-pad <file>           read the pad from a script instead of a device
 --exit-after <s>            end after s seconds
 --quiet                     no status line
 --verbose                   once a second, the first 8 channels of the last packet and how many were sent
+--version, -h/--help
 ```
 
 Exit codes: 0 normal end; 2 usage error; 3 no pad or no access to it; 4 the start was refused (no terminal and no `--go`, or a stick
@@ -158,8 +162,7 @@ sitl-transmitter --fake-pad examples/hover.jsonl --go --exit-after 10
 
 `pico fmt --check . && pico lint . && pico test .`. No hardware is needed: the pad is pico-gamepad's fake system or a script, the
 network is the loopback address with a receiver of the tests' own, and the loop runs on a clock that only moves when it waits. CI runs
-them on Linux (x64, arm64), macOS and Windows with a literal `PICO_VERSION` and a checkout of `padcom/pico-gamepad` next to this
-repository (`signals.linux.pi`, the one Linux-only file, is replaced off Linux by `signals.pi`).
+them on Linux (x64, arm64), macOS and Windows with a literal `PICO_VERSION` (`signals.linux.pi`, the one Linux-only file, is replaced off Linux by `signals.pi`).
 
 ## License
 

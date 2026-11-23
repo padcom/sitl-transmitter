@@ -2,13 +2,12 @@
 // that say things, the control): `main.pi` only hands in the real ones. Exit codes: 0 normal end, 2 usage error, 3 no pad or no access,
 // 4 the start was refused, 5 the UDP socket or the host.
 import { PadSystem, defaultSystem, listPads } from "padcom/pico-gamepad"
-import { USAGE, parse } from "./cli"
+import { parse } from "./cli"
 import { DeviceSource, listLine, pickPad } from "./devicesource"
 import { FakeSource, readScript } from "./fakepad"
 import { Control, Out, Time, run } from "./runner"
 import { makeSink, resolveHost } from "./sender"
 import { Source } from "./source"
-import { versionLine } from "./version"
 import { readText } from "std/fs"
 
 /// A line for each pad of the system, or the hint when there are none.
@@ -69,17 +68,10 @@ export async function execute(args: string[], interactive: bool, out: Out, err: 
   const parsed = parse(args, interactive)
   if (parsed.action == "error") {
     err.line(parsed.message)
-    if (parsed.code == 2) {
-      err.line(USAGE)
-    }
     return parsed.code
   }
-  if (parsed.action == "help") {
-    out.line(USAGE)
-    return 0
-  }
-  if (parsed.action == "version") {
-    out.line(versionLine())
+  if (parsed.action == "help" || parsed.action == "version") {
+    out.line(parsed.message)
     return 0
   }
   if (parsed.action == "list") {
