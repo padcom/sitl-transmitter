@@ -9,7 +9,7 @@
     },
     "padcom/pico-commander": {
       "git": "https://github.com/padcom/pico-commander",
-      "branch": "chore/package-name"
+      "tag": "v0.5.0"
     }
   }
 }
