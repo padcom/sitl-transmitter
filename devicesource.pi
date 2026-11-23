@@ -3,7 +3,22 @@
 import { Pad, PadError, PadInfo, PadSystem, defaultSystem, listPads, openPad } from "padcom/pico-gamepad"
 import { Reading } from "./gate"
 import { Source } from "./source"
-import { digits } from "./cli"
+
+/// A whole number written in digits (no sign, no spaces), or -1 for anything else: a list index.
+export function digits(text: string): int {
+  if (text.length == 0 || text.length > 9) {
+    return -1
+  }
+  let n = 0
+  for (let i = 0; i < text.length; i++) {
+    const digit = "0123456789".indexOf(text.slice(i, i + 1))
+    if (digit < 0) {
+      return -1
+    }
+    n = n * 10 + digit
+  }
+  return n
+}
 
 /// The pad a `--pad` text (or none) stands for: its index in the list, or why not.
 export class Pick {

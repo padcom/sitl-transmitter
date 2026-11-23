@@ -2,7 +2,8 @@
 // that say things, the control): `main.pi` only hands in the real ones. Exit codes: 0 normal end, 2 usage error, 3 no pad or no access,
 // 4 the start was refused, 5 the UDP socket or the host.
 import { PadSystem, defaultSystem, listPads } from "padcom/pico-gamepad"
-import { parse } from "./cli"
+import { CommanderError } from "padcom/pico-commander"
+import { Options, createProgram, optionsOf } from "./cli"
 import { DeviceSource, listLine, pickPad } from "./devicesource"
 import { FakeSource, readScript } from "./fakepad"
 import { Control, Out, Time, run } from "./runner"
@@ -63,22 +64,42 @@ async function choose(padText: string, fakePad: string, system: PadSystem, err: 
   return chosen
 }
 
+/// What the action came to (the exit code of a run, or 0 for the list).
+class Outcome {
+  public code: int = 0
+}
+
 /// Runs the program. `interactive` is whether stdin is a terminal; `control` is what the keyboard and the signals set while it runs.
 export async function execute(args: string[], interactive: bool, out: Out, err: Out, time: Time, control: Control, system: PadSystem = defaultSystem()): Promise<int> throws Error {
-  const parsed = parse(args, interactive)
-  if (parsed.action == "error") {
-    err.line(parsed.message)
-    return parsed.code
+  const outcome = new Outcome()
+  const program = createProgram()
+    .exitOverride()
+    .configureOutput({
+      writeOut: (text: string) => out.line(text.trimEnd()),
+      writeErr: (text: string) => err.line(text.trimEnd()),
+    })
+    .action(async (_args, opts, cmd) => {
+      const options = optionsOf(opts)
+      if (options.list) {
+        await list(system, out)
+        return
+      }
+      if (!interactive && !options.go) {
+        cmd.error("error: stdin is not a terminal: there is nobody to press Enter. Start it with --go (it then sends as soon as the sticks are at rest)", { exitCode: 4, code: "sitl.notInteractive" })
+      }
+      outcome.code = await start(options, out, err, time, control, system)
+    })
+  try {
+    await program.parseAsync(args)
+  } catch (e: CommanderError) {
+    // (0 after --help and --version; commander's own errors, 1, are usage errors: 2; ours keep their code)
+    return if (e.exitCode == 1) 2 else e.exitCode
   }
-  if (parsed.action == "help" || parsed.action == "version") {
-    out.line(parsed.message)
-    return 0
-  }
-  if (parsed.action == "list") {
-    await list(system, out)
-    return 0
-  }
-  const options = parsed.options
+  return outcome.code
+}
+
+/// Sends from the pad the options choose to the host and port they name, until the run ends: its exit code.
+async function start(options: Options, out: Out, err: Out, time: Time, control: Control, system: PadSystem): Promise<int> throws Error {
   const chosen = await choose(options.pad, options.fakePad, system, err, out)
   if (chosen.source == null) {
     return chosen.code

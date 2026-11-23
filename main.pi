@@ -1,6 +1,6 @@
 // sitl-transmitter: a pass-through virtual transmitter for ArduPilot SITL (see README.md). This file only hands the real world to
 // `app.pi`: the arguments, the terminal, the clock, stdout and stderr, and the keyboard and the signals as a `Control`.
-import { args, exit, stderr, stdin } from "std/process"
+import { args, exit, stdin } from "std/process"
 import { delay } from "std/timers"
 import { monotonicUs } from "padcom/pico-gamepad"
 import { execute } from "./app"
@@ -13,9 +13,10 @@ class Stdout implements Out {
   }
 }
 
+/// (Written at once, as `println` is: an `exit` right after drops writes that `stderr.writeText` still has queued.)
 class Stderr implements Out {
   public line(text: string): void {
-    stderr.writeText(text + "\n")
+    eprintln(text)
   }
 }
 

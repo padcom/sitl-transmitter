@@ -1,131 +1,163 @@
-// Every flag and its default, the ranges, the precedence of --port over --instance, --host, and the exit codes (2 and 4).
+// The commander program: every flag and its default, the ranges, the precedence of --port over --instance, --host, and the help.
 import { describe, it, expect } from "std/test"
-import { addressProblem, digits, parse, usage } from "./cli"
+import { Command, CommanderError } from "padcom/pico-commander"
+import { Options, addressProblem, createProgram, optionsOf } from "./cli"
+import { digits } from "./devicesource"
 
-function ok(args: string[]): string {
-  const p = parse(args, true)
-  return `${p.action} ${p.code}`
+/// The program with its output kept.
+class Probe {
+  public out: string = ""
+  public err: string = ""
+  public program: Command
+
+  constructor() {
+    program = createProgram().exitOverride().configureOutput({
+      writeOut: (s: string) => { out += s },
+      writeErr: (s: string) => { err += s },
+    })
+  }
 }
 
-function errorOf(args: string[], interactive: bool = true): string {
-  // (the first line: the second is the hint "(sitl-transmitter --help lists the options)")
-  const p = parse(args, interactive)
-  return `${p.action} ${p.code}: ${p.message.split("\n")[0]}`
+function read(args: string[]): Options {
+  const probe = new Probe()
+  probe.program.parse(args)
+  return optionsOf(probe.program.opts())
+}
+
+function ok(args: string[]): string {
+  try {
+    read(args)
+    return "ok"
+  } catch (e: CommanderError) {
+    return `${e.code} ${e.exitCode}`
+  }
+}
+
+/// The first line commander wrote to stderr (the second is the hint "(sitl-transmitter --help lists the options)").
+function errorOf(args: string[]): string {
+  const probe = new Probe()
+  try {
+    probe.program.parse(args)
+  } catch (e: CommanderError) {
+    return probe.err.split("\n")[0]
+  }
+  return "no error"
+}
+
+function invalid(term: string, value: string, why: string): string {
+  return `error: option '${term}' argument '${value}' is invalid. ${why}`
 }
 
 function theDefaultsAreThoseOfThePlan(): void {
-  const p = parse([], true)
-  const o = p.options
-  expect(`${p.action} ${p.code}`).toBe("run 0")
+  const o = read([])
   expect(`${o.pad}|${o.instance}|${o.port}|${o.portOf()}|${o.host}|${o.rate}|${o.offset}|${o.sticks.join(",")}|${o.throttleLow}|${o.rudderArm}|${o.go}|${o.fakePad}|${o.exitAfter}|${o.quiet}|${o.verbose}|${o.list}`).toBe(
     "|0|-1|5501|127.0.0.1|50|0|1,2,3,4|false|false|false||-1|false|false|false",
   )
 }
 
 function everyFlagIsRead(): void {
-  const p = parse(["--pad", "1209:4f54", "--instance", "2", "--host", "192.168.1.20", "--rate", "25", "--offset", "3", "--sticks", "2,1,4,3", "--throttle-rest", "low", "--rudder-arm", "--go", "--fake-pad", "x.jsonl", "--exit-after", "30", "--quiet", "--verbose"], false)
-  const o = p.options
-  expect(`${p.action} ${p.code}`).toBe("run 0")
-  expect(`${o.pad}|${o.instance}|${o.portOf()}|${o.host}|${o.rate}|${o.offset}|${o.sticks.join(",")}|${o.throttleLow}|${o.rudderArm}|${o.go}|${o.fakePad}|${o.exitAfter}|${o.quiet}|${o.verbose}`).toBe(
-    "1209:4f54|2|5521|192.168.1.20|25|3|2,1,4,3|true|true|true|x.jsonl|30|true|true",
+  const o = read(["--pad", "1209:4f54", "--instance", "2", "--host", "192.168.1.20", "--rate", "25", "--offset", "3", "--sticks", "2, 1,4,3", "--throttle-rest", "low", "--rudder-arm", "--go", "--fake-pad", "x.jsonl", "--exit-after", "30", "--quiet", "--verbose", "--list"])
+  expect(`${o.pad}|${o.instance}|${o.portOf()}|${o.host}|${o.rate}|${o.offset}|${o.sticks.join(",")}|${o.throttleLow}|${o.rudderArm}|${o.go}|${o.fakePad}|${o.exitAfter}|${o.quiet}|${o.verbose}|${o.list}`).toBe(
+    "1209:4f54|2|5521|192.168.1.20|25|3|2,1,4,3|true|true|true|x.jsonl|30|true|true|true",
   )
 }
 
 function theFlagMayBeWrittenWithAnEqualsSign(): void {
-  const o = parse(["--rate=40", "--host=localhost", "--sticks=1,2,3,4"], true).options
+  const o = read(["--rate=40", "--host=localhost", "--sticks=1,2,3,4"])
   expect(`${o.rate} ${o.host}`).toBe("40 localhost")
 }
 
 function anExplicitPortWinsOverTheInstance(): void {
-  expect(parse(["--instance", "3"], true).options.portOf()).toBe(5531)
-  expect(parse(["--instance", "3", "--port", "6000"], true).options.portOf()).toBe(6000)
-  expect(parse(["--port", "6000", "--instance", "3"], true).options.portOf()).toBe(6000)
+  expect(read(["--instance", "3"]).portOf()).toBe(5531)
+  expect(read(["--instance", "3", "--port", "6000"]).portOf()).toBe(6000)
+  expect(read(["--port", "6000", "--instance", "3"]).portOf()).toBe(6000)
 }
 
 function theRangesAreChecked(): void {
-  expect(errorOf(["--rate", "9"])).toBe("error 2: error: option '--rate <hz>' argument '9' is invalid. It wants a whole number from 10 to 100.")
-  expect(ok(["--rate", "10"])).toBe("run 0")
-  expect(ok(["--rate", "100"])).toBe("run 0")
-  expect(errorOf(["--rate", "101"])).toBe("error 2: error: option '--rate <hz>' argument '101' is invalid. It wants a whole number from 10 to 100.")
-  expect(errorOf(["--offset", "9"])).toBe("error 2: error: option '--offset <n>' argument '9' is invalid. It wants a whole number from 0 to 8.")
-  expect(errorOf(["--port", "1023"])).toBe("error 2: error: option '--port <p>' argument '1023' is invalid. It wants a whole number from 1024 to 65535.")
-  expect(errorOf(["--port", "65536"])).toBe("error 2: error: option '--port <p>' argument '65536' is invalid. It wants a whole number from 1024 to 65535.")
-  expect(ok(["--port", "1024"])).toBe("run 0")
-  expect(errorOf(["--exit-after", "0"])).toBe("error 2: error: option '--exit-after <s>' argument '0' is invalid. It wants a whole number from 1 to 86400.")
-  expect(errorOf(["--rate", "fast"])).toBe("error 2: error: option '--rate <hz>' argument 'fast' is invalid. It wants a whole number from 10 to 100.")
-  expect(errorOf(["--rate", "-5"])).toBe("error 2: error: option '--rate <hz>' argument '-5' is invalid. It wants a whole number from 10 to 100.")
-  expect(errorOf(["--instance", "6004"])).toBe("error 2: error: option '--instance <n>' argument '6004' is invalid. It wants a whole number from 0 to 6003.")
+  expect(errorOf(["--rate", "9"])).toBe(invalid("--rate <hz>", "9", "It wants a whole number from 10 to 100."))
+  expect(ok(["--rate", "10"])).toBe("ok")
+  expect(ok(["--rate", "100"])).toBe("ok")
+  expect(errorOf(["--rate", "101"])).toBe(invalid("--rate <hz>", "101", "It wants a whole number from 10 to 100."))
+  expect(errorOf(["--offset", "9"])).toBe(invalid("--offset <n>", "9", "It wants a whole number from 0 to 8."))
+  expect(errorOf(["--port", "1023"])).toBe(invalid("--port <p>", "1023", "It wants a whole number from 1024 to 65535."))
+  expect(errorOf(["--port", "65536"])).toBe(invalid("--port <p>", "65536", "It wants a whole number from 1024 to 65535."))
+  expect(ok(["--port", "1024"])).toBe("ok")
+  expect(errorOf(["--exit-after", "0"])).toBe(invalid("--exit-after <s>", "0", "It wants a whole number from 1 to 86400."))
+  expect(errorOf(["--rate", "fast"])).toBe(invalid("--rate <hz>", "fast", "It wants a whole number from 10 to 100."))
+  expect(errorOf(["--rate", "-5"])).toBe(invalid("--rate <hz>", "-5", "It wants a whole number from 10 to 100."))
+  expect(ok(["--rate", "9"])).toBe("commander.invalidArgument 1")
 }
 
 function anInstanceIsAcceptedWhilePortStaysUnder65535(): void {
-  expect(ok(["--instance", "99"])).toBe("run 0")
-  expect(parse(["--instance", "99"], true).options.portOf()).toBe(6491)
-  expect(parse(["--instance", "1000"], true).options.portOf()).toBe(15501)
-  expect(ok(["--instance", "6003"])).toBe("run 0")
-  expect(parse(["--instance", "6003"], true).options.portOf()).toBe(65531)
-  expect(errorOf(["--instance", "6004"])).toBe("error 2: error: option '--instance <n>' argument '6004' is invalid. It wants a whole number from 0 to 6003.")
-  expect(errorOf(["--instance", "-1"])).toBe("error 2: error: option '--instance <n>' argument '-1' is invalid. It wants a whole number from 0 to 6003.")
+  expect(read(["--instance", "99"]).portOf()).toBe(6491)
+  expect(read(["--instance", "1000"]).portOf()).toBe(15501)
+  expect(read(["--instance", "6003"]).portOf()).toBe(65531)
+  expect(errorOf(["--instance", "6004"])).toBe(invalid("--instance <n>", "6004", "It wants a whole number from 0 to 6003."))
+  expect(errorOf(["--instance", "-1"])).toBe(invalid("--instance <n>", "-1", "It wants a whole number from 0 to 6003."))
 }
 
 function sticksOutsideOneToSixteenAndDuplicatesAreRefused(): void {
-  expect(errorOf(["--sticks", "0,2,3,4"])).toBe("error 2: error: option '--sticks <r,p,t,y>' argument '0,2,3,4' is invalid. It wants four RC channels from 1 to 16, like 1,2,3,4.")
-  expect(errorOf(["--sticks", "1,2,3,17"])).toBe("error 2: error: option '--sticks <r,p,t,y>' argument '1,2,3,17' is invalid. It wants four RC channels from 1 to 16, like 1,2,3,4.")
-  expect(errorOf(["--sticks", "1,2,3"])).toBe("error 2: error: option '--sticks <r,p,t,y>' argument '1,2,3' is invalid. It wants four RC channels from 1 to 16, like 1,2,3,4.")
-  expect(errorOf(["--sticks", "1,2,3,4,5"])).toBe("error 2: error: option '--sticks <r,p,t,y>' argument '1,2,3,4,5' is invalid. It wants four RC channels from 1 to 16, like 1,2,3,4.")
-  expect(errorOf(["--sticks", "1,2,a,4"])).toBe("error 2: error: option '--sticks <r,p,t,y>' argument '1,2,a,4' is invalid. It wants four RC channels from 1 to 16, like 1,2,3,4.")
-  expect(errorOf(["--sticks", "1,2,3,3"])).toBe("error 2: error: option '--sticks <r,p,t,y>' argument '1,2,3,3' is invalid. It wants four different channels.")
-  expect(errorOf(["--sticks", "4,4,4,4"])).toBe("error 2: error: option '--sticks <r,p,t,y>' argument '4,4,4,4' is invalid. It wants four different channels.")
-  expect(ok(["--sticks", "16,15,14,13"])).toBe("run 0")
+  const four = "It wants four RC channels from 1 to 16, like 1,2,3,4."
+  for (const bad of ["0,2,3,4", "1,2,3,17", "1,2,3", "1,2,3,4,5", "1,2,a,4"]) {
+    expect(errorOf(["--sticks", bad])).toBe(invalid("--sticks <r,p,t,y>", bad, four))
+  }
+  expect(errorOf(["--sticks", "1,2,3,3"])).toBe(invalid("--sticks <r,p,t,y>", "1,2,3,3", "It wants four different channels."))
+  expect(errorOf(["--sticks", "4,4,4,4"])).toBe(invalid("--sticks <r,p,t,y>", "4,4,4,4", "It wants four different channels."))
+  expect(read(["--sticks", "16,15,14,13"]).sticks.join(",")).toBe("16,15,14,13")
 }
 
 function theThrottleRestIsCentreOrLow(): void {
-  expect(parse(["--throttle-rest", "centre"], true).options.throttleLow).toBe(false)
-  expect(parse(["--throttle-rest", "low"], true).options.throttleLow).toBe(true)
-  expect(errorOf(["--throttle-rest", "high"])).toBe("error 2: error: option '--throttle-rest <rest>' argument 'high' is invalid. Allowed choices are centre, low.")
+  expect(read(["--throttle-rest", "centre"]).throttleLow).toBe(false)
+  expect(read(["--throttle-rest", "low"]).throttleLow).toBe(true)
+  expect(errorOf(["--throttle-rest", "high"])).toBe(invalid("--throttle-rest <rest>", "high", "Allowed choices are centre, low."))
 }
 
 function aHostIsAnIpOrANameButNotABroadcastOrMulticast(): void {
-  expect(ok(["--host", "192.168.1.20"])).toBe("run 0")
-  expect(ok(["--host", "sitl-vm.local"])).toBe("run 0")
-  expect(errorOf(["--host", "255.255.255.255"])).toBe("error 2: error: option '--host <ip|name>' argument '255.255.255.255' is invalid. It is the broadcast address: name the host that runs SITL.")
-  expect(errorOf(["--host", "224.0.0.1"])).toBe("error 2: error: option '--host <ip|name>' argument '224.0.0.1' is invalid. It is a multicast address: name the host that runs SITL.")
-  expect(errorOf(["--host", "239.255.255.250"])).toBe("error 2: error: option '--host <ip|name>' argument '239.255.255.250' is invalid. It is a multicast address: name the host that runs SITL.")
-  expect(errorOf(["--host", "0.0.0.0"])).toBe("error 2: error: option '--host <ip|name>' argument '0.0.0.0' is invalid. It is the address 0.0.0.0: name the host that runs SITL.")
-  expect(errorOf(["--host", "::1"])).toBe("error 2: error: option '--host <ip|name>' argument '::1' is invalid. It is an IPv6 address: use an IPv4 address or a name.")
+  expect(ok(["--host", "192.168.1.20"])).toBe("ok")
+  expect(ok(["--host", "sitl-vm.local"])).toBe("ok")
+  expect(errorOf(["--host", "255.255.255.255"])).toBe(invalid("--host <ip|name>", "255.255.255.255", "It is the broadcast address: name the host that runs SITL."))
+  expect(errorOf(["--host", "224.0.0.1"])).toBe(invalid("--host <ip|name>", "224.0.0.1", "It is a multicast address: name the host that runs SITL."))
+  expect(errorOf(["--host", "239.255.255.250"])).toBe(invalid("--host <ip|name>", "239.255.255.250", "It is a multicast address: name the host that runs SITL."))
+  expect(errorOf(["--host", "0.0.0.0"])).toBe(invalid("--host <ip|name>", "0.0.0.0", "It is the address 0.0.0.0: name the host that runs SITL."))
+  expect(errorOf(["--host", "::1"])).toBe(invalid("--host <ip|name>", "::1", "It is an IPv6 address: use an IPv4 address or a name."))
+  expect(errorOf(["--host", ""])).toBe(invalid("--host <ip|name>", "", "No host."))
   expect(addressProblem("223.255.255.255")).toBe("")
   expect(addressProblem("240.0.0.1")).toBe("")
 }
 
 function aMissingValueAnUnknownFlagAndAValueOnAFlagWithoutOneAreUsageErrors(): void {
-  expect(errorOf(["--rate"])).toBe("error 2: error: option '--rate <hz>' argument missing")
-  expect(errorOf(["--nope"])).toBe("error 2: error: unknown option '--nope'")
-  expect(errorOf(["--rtae", "40"])).toBe("error 2: error: unknown option '--rtae'")
-  expect(errorOf(["somewhere"])).toBe("error 2: error: too many arguments. Expected 0 arguments but got 1.")
-  expect(errorOf(["--go=yes"])).toBe("error 2: error: unknown option '--go=yes'")
-  expect(parse(["--nope"], true).message.split("\n")[1]).toBe("(sitl-transmitter --help lists the options)")
-}
-
-function theActionsAreListHelpAndVersionAndTheyNeedNoGo(): void {
-  expect(parse(["--list"], false).action).toBe("list")
-  expect(parse(["--help"], false).action).toBe("help")
-  expect(parse(["--version"], false).action).toBe("version")
-  expect(parse(["--version"], false).message).toBe("sitl-transmitter 0.0.1")
-  expect(parse(["-h"], false).message).toBe(usage())
-}
-
-function withoutATerminalAStartNeedsGo(): void {
-  expect(errorOf([], false)).toBe("error 4: stdin is not a terminal: there is nobody to press Enter. Start it with --go (it then sends as soon as the sticks are at rest)")
-  expect(parse(["--go"], false).action).toBe("run")
-  expect(parse([], true).action).toBe("run")
-}
-
-function theUsageNamesEveryFlagAndTheExitCodes(): void {
-  const USAGE = usage()
-  expect(USAGE.startsWith("Usage: sitl-transmitter [options]")).toBe(true)
-  for (const flag of ["--list", "--pad", "--instance", "--port", "--host", "--rate", "--offset", "--sticks", "--throttle-rest", "--rudder-arm", "--go", "--fake-pad", "--exit-after", "--quiet", "--verbose", "--version", "--help"]) {
-    expect(USAGE.includes(flag)).toBe(true)
+  expect(errorOf(["--rate"])).toBe("error: option '--rate <hz>' argument missing")
+  expect(errorOf(["--nope"])).toBe("error: unknown option '--nope'")
+  expect(errorOf(["somewhere"])).toBe("error: too many arguments. Expected 0 arguments but got 1.")
+  expect(errorOf(["--go=yes"])).toBe("error: unknown option '--go=yes'")
+  const probe = new Probe()
+  try {
+    probe.program.parse(["--verbos"])
+  } catch (e: CommanderError) {
+    expect(e.code).toBe("commander.unknownOption")
   }
-  expect(USAGE.includes("5  the UDP socket could not be made or the host not resolved")).toBe(true)
+  expect(probe.err).toBe("error: unknown option '--verbos'\n(Did you mean --verbose?)\n(sitl-transmitter --help lists the options)\n")
+}
+
+function helpAndVersionAreCommanders(): void {
+  const help = new Probe()
+  try {
+    help.program.parse(["-h"])
+  } catch (e: CommanderError) {
+    expect(`${e.code} ${e.exitCode}`).toBe("commander.helpDisplayed 0")
+  }
+  expect(help.out.startsWith("Usage: sitl-transmitter [options]\n")).toBe(true)
+  for (const flag of ["--list", "--pad", "--instance", "--port", "--host", "--rate", "--offset", "--sticks", "--throttle-rest", "--rudder-arm", "--go", "--fake-pad", "--exit-after", "--quiet", "--verbose", "--version", "--help"]) {
+    expect(help.out.includes(flag)).toBe(true)
+  }
+  expect(help.out.includes("5  the UDP socket could not be made or the host not resolved")).toBe(true)
+  const version = new Probe()
+  try {
+    version.program.parse(["--version"])
+  } catch (e: CommanderError) {
+    expect(`${e.code} ${e.exitCode}`).toBe("commander.version 0")
+  }
+  expect(version.out).toBe("sitl-transmitter 0.0.1\n")
 }
 
 function digitsAreOnlyDigits(): void {
@@ -142,9 +174,7 @@ describe("the command line", () => {
   it("refuses --sticks outside 1..16, of the wrong count, and with duplicates", sticksOutsideOneToSixteenAndDuplicatesAreRefused)
   it("takes the throttle rest as centre or low", theThrottleRestIsCentreOrLow)
   it("takes --host as an IPv4 address or a name, and refuses a broadcast, a multicast, 0.0.0.0 and IPv6", aHostIsAnIpOrANameButNotABroadcastOrMulticast)
-  it("refuses a missing value, an unknown flag and a value on a flag without one", aMissingValueAnUnknownFlagAndAValueOnAFlagWithoutOneAreUsageErrors)
-  it("has the actions list, help and version, which need no --go", theActionsAreListHelpAndVersionAndTheyNeedNoGo)
-  it("refuses a start without a terminal and without --go (4)", withoutATerminalAStartNeedsGo)
-  it("has a usage text that names every flag and the exit codes", theUsageNamesEveryFlagAndTheExitCodes)
-  it("reads a number only in digits", digitsAreOnlyDigits)
+  it("refuses a missing value, an unknown flag and a value on a flag without one, with suggestions", aMissingValueAnUnknownFlagAndAValueOnAFlagWithoutOneAreUsageErrors)
+  it("leaves --help and --version to commander", helpAndVersionAreCommanders)
+  it("reads a pad index only in digits", digitsAreOnlyDigits)
 })
