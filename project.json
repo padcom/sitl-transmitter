@@ -2,8 +2,14 @@
   "name": "padcom/sitl-transmitter",
   "version": "0.0.1",
   "entry": "main.pi",
-  "workspace": ["../pico-gamepad"],
   "dependencies": {
-    "padcom/pico-gamepad": "0.0.1"
+    "padcom/pico-gamepad": {
+      "git": "https://github.com/padcom/pico-gamepad",
+      "tag": "v0.1.0"
+    },
+    "padcom/commander": {
+      "git": "https://github.com/padcom/pico-commander",
+      "tag": "v0.4.0"
+    }
   }
 }

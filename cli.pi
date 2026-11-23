@@ -1,30 +1,8 @@
-// The command line (section 4 of the plan): flags -> Options, with every range checked, the usage text, and the exit code of a
-// refusal (2 for a usage error, 4 for a start that is refused: not interactive and no --go). Pure: no I/O, no exit.
-
-/// The program's usage text.
-export const USAGE = `usage: sitl-transmitter [options]
-
-Reads one gamepad or radio and sends its channels, as a receiver would, to ArduPilot SITL's UDP RC input (SITL only: never a vehicle).
-
-  --list                      list the pads (index, name, id, path, axes, buttons) and exit
-  --pad <n|id|text>           the list index, the exact id (1209:4f54) or a part of the name (default: the only pad)
-  --instance <n>              SITL instance (-I n), 0..6003: port = 5501 + 10 n, only where SITL derives its RC port from -I
-  --port <p>                  UDP port 1024..65535; wins over --instance (default 5501)
-  --host <ip|name>            where SITL runs, e.g. a virtual machine (default 127.0.0.1); resolved once at start
-  --rate <hz>                 send rate 10..100 (default 50)
-  --offset <n>                channel offset 0..8: pad channel k goes to RC channel k + offset (default 0)
-  --sticks <r,p,t,y>          the RC channels of roll, pitch, throttle, yaw: the vehicle's RCMAP_* (default 1,2,3,4)
-  --throttle-rest centre|low  where the throttle rests (default centre)
-  --rudder-arm                lift the yaw hold, so that the sticks can arm and disarm
-  --go                        no "press Enter" (required when stdin is not a terminal)
-  --fake-pad <file>           read the pad from a script (JSON Lines) instead of a device
-  --exit-after <s>            end (after the neutral frame) after s seconds
-  --quiet                     no status line
-  --verbose                   once a second, the first 8 channels of the last packet and how many were sent
-  --version, --help
-
-Ends with q + Enter (or Ctrl-C where the platform lets it). Exit codes: 0 normal end, 2 usage error, 3 no pad or no access to it,
-4 the start was refused, 5 the UDP socket could not be made or the host not resolved.`
+// The command line (section 4 of the plan), read by pico-commander: flags -> Options, with every range checked, the help text, and
+// the exit code of a refusal (2 for a usage error, 4 for a start that is refused: not interactive and no --go). Pure: no I/O, no exit
+// (commander's output is caught and handed back in `Parsed.message`).
+import { Command, CommanderError, InvalidArgumentError, Option, Parser, Value, Values } from "padcom/commander"
+import { NAME, versionLine } from "./version"
 
 /// Everything the command line can say.
 export class Options {
@@ -54,20 +32,13 @@ export class Options {
   }
 }
 
-/// What the command line came to: an action (`run`, `list`, `help`, `version`, or `error` with an exit code and a line), and the options.
+/// What the command line came to: an action (`run`, `list`, `help`, `version`, or `error` with an exit code), the text to show (the
+/// help or the version for stdout, the error for stderr; without its last line break) and the options.
 export class Parsed {
   public action: string = "run"
   public code: int = 0
   public message: string = ""
   public options: Options = new Options()
-}
-
-function failure(code: int, message: string): Parsed {
-  const parsed = new Parsed()
-  parsed.action = "error"
-  parsed.code = code
-  parsed.message = message
-  return parsed
 }
 
 /// A whole number written in digits (no sign, no spaces), or -1 for anything else.
@@ -109,7 +80,7 @@ export function addressProblem(address: string): string {
   return ""
 }
 
-/// The `--sticks` list: four distinct channels 1..16, or an error line.
+/// The `--sticks` list: the channels 1..16 it names, or [] when one is not.
 function sticksOf(text: string): int[] {
   const out: int[] = []
   const parts = text.split(",")
@@ -134,128 +105,153 @@ function hasDuplicates(values: int[]): bool {
   return false
 }
 
-/// The flags that take a value, and the ones that do not.
-const WITH_VALUE = ["--pad", "--instance", "--port", "--host", "--rate", "--offset", "--sticks", "--throttle-rest", "--fake-pad", "--exit-after"]
-const WITHOUT_VALUE = ["--list", "--rudder-arm", "--go", "--quiet", "--verbose", "--version", "--help"]
-
-/// Applies one flag to the options; "" when it is fine, else the usage error.
-function apply(options: Options, flag: string, value: string): string {
-  if (flag == "--pad") {
-    options.pad = value
-  } else if (flag == "--host") {
-    const problem = addressProblem(value)
-    if (value.length == 0 || problem != "") {
-      return `--host ${value}: ${if (value.length == 0) "no host" else problem}`
-    }
-    options.host = value
-  } else if (flag == "--fake-pad") {
-    options.fakePad = value
-  } else if (flag == "--throttle-rest") {
-    if (value != "centre" && value != "low") {
-      return `--throttle-rest wants centre or low, not ${value}`
-    }
-    options.throttleLow = value == "low"
-  } else if (flag == "--sticks") {
-    const sticks = sticksOf(value)
-    if (sticks.length != 4) {
-      return `--sticks wants four RC channels from 1 to 16, like 1,2,3,4: not ${value}`
-    }
-    if (hasDuplicates(sticks)) {
-      return `--sticks wants four different channels: not ${value}`
-    }
-    options.sticks = sticks
-  } else {
-    return applyNumber(options, flag, value)
-  }
-  return ""
-}
-
 /// The highest SITL instance whose RC-in port (5501 + 10 n) is still a port: 5501 + 10 * 6003 = 65531.
 const MAX_INSTANCE = 6003
 
-/// The flags whose value is a whole number, each in its range.
-function applyNumber(options: Options, flag: string, value: string): string {
-  const n = digits(value)
-  const low = if (flag == "--port") 1024 else if (flag == "--rate") 10 else if (flag == "--exit-after") 1 else 0
-  const high = if (flag == "--port") 65535 else if (flag == "--rate") 100 else if (flag == "--offset") 8 else if (flag == "--instance") MAX_INSTANCE else 86400
-  if (n < low || n > high) {
-    return `${flag} wants a whole number from ${low} to ${high}, not ${value}`
+/// A parser for a whole number from `low` to `high`, in digits.
+function whole(low: int, high: int): Parser {
+  return (value: string, _previous: Value?): Value => {
+    const n = digits(value)
+    if (n < low || n > high) {
+      throw new InvalidArgumentError(`It wants a whole number from ${low} to ${high}.`)
+    }
+    return Value.Int(n)
   }
-  if (flag == "--port") {
-    options.port = n
-  } else if (flag == "--instance") {
-    options.instance = n
-  } else if (flag == "--rate") {
-    options.rate = n
-  } else if (flag == "--offset") {
-    options.offset = n
-  } else {
-    options.exitAfter = n
+}
+
+function host(value: string, _previous: Value?): Value throws Error {
+  if (value.length == 0) {
+    throw new InvalidArgumentError("No host.")
   }
-  return ""
+  const problem = addressProblem(value)
+  if (problem != "") {
+    throw new InvalidArgumentError(`It is ${problem}.`)
+  }
+  return Value.Str(value)
+}
+
+function sticks(value: string, _previous: Value?): Value throws Error {
+  const channels = sticksOf(value)
+  if (channels.length != 4) {
+    throw new InvalidArgumentError("It wants four RC channels from 1 to 16, like 1,2,3,4.")
+  }
+  if (hasDuplicates(channels)) {
+    throw new InvalidArgumentError("It wants four different channels.")
+  }
+  return Value.Str(value)
+}
+
+/// Where commander writes: kept, to be handed back.
+class Capture {
+  public out: string = ""
+  public err: string = ""
+}
+
+const DESCRIPTION = "Reads one gamepad or radio and sends its channels, as a receiver would, to ArduPilot SITL's UDP RC input (SITL only: never a vehicle)."
+
+const AFTER = `
+Ends with q + Enter (or Ctrl-C where the platform lets it).
+
+Exit codes:
+  0  normal end
+  2  usage error
+  3  no pad or no access to it
+  4  the start was refused
+  5  the UDP socket could not be made or the host not resolved`
+
+/// The program's command line, writing to `capture`.
+function program(capture: Capture): Command {
+  return new Command()
+    .name(NAME)
+    .description(DESCRIPTION)
+    .exitOverride()
+    .configureOutput({
+      writeOut: (s: string) => { capture.out += s },
+      writeErr: (s: string) => { capture.err += s },
+    })
+    .showHelpAfterError(`(${NAME} --help lists the options)`)
+    .option("--list", "list the pads (index, name, id, path, axes, buttons) and exit")
+    .option("--pad <n|id|text>", "the list index, the exact id (1209:4f54) or a part of the name (default: the only pad)")
+    .option("--instance <n>", `SITL instance (-I n), 0..${MAX_INSTANCE}: port = 5501 + 10 n, only where SITL derives its RC port from -I`, whole(0, MAX_INSTANCE), 0)
+    .option("--port <p>", "UDP port 1024..65535; wins over --instance (default: 5501)", whole(1024, 65535))
+    .option("--host <ip|name>", "where SITL runs, e.g. a virtual machine; resolved once at start", host, "127.0.0.1")
+    .option("--rate <hz>", "send rate 10..100", whole(10, 100), 50)
+    .option("--offset <n>", "channel offset 0..8: pad channel k goes to RC channel k + offset", whole(0, 8), 0)
+    .option("--sticks <r,p,t,y>", "the RC channels of roll, pitch, throttle, yaw: the vehicle's RCMAP_*", sticks, "1,2,3,4")
+    .addOption(new Option("--throttle-rest <rest>", "where the throttle rests").choices(["centre", "low"]).default("centre"))
+    .option("--rudder-arm", "lift the yaw hold, so that the sticks can arm and disarm")
+    .option("--go", "no \"press Enter\" (required when stdin is not a terminal)")
+    .option("--fake-pad <file>", "read the pad from a script (JSON Lines) instead of a device")
+    .option("--exit-after <s>", "end (after the neutral frame) after s seconds, 1..86400", whole(1, 86400))
+    .option("--quiet", "no status line")
+    .option("--verbose", "once a second, the first 8 channels of the last packet and how many were sent")
+    .version(versionLine(), "--version", "print the name and the version")
+    .helpOption("-h, --help", "show this help")
+    .addHelpText("after", AFTER)
+}
+
+/// The help text, as `--help` shows it.
+export function usage(): string {
+  return parse(["--help"], true).message
+}
+
+/// The options commander read.
+function optionsOf(opts: Values): Options {
+  const options = new Options()
+  options.list = opts.bool("list")
+  options.pad = opts.string("pad") ?? ""
+  options.instance = opts.int("instance") ?? 0
+  options.port = opts.int("port") ?? -1
+  options.host = opts.string("host") ?? "127.0.0.1"
+  options.rate = opts.int("rate") ?? 50
+  options.offset = opts.int("offset") ?? 0
+  options.sticks = sticksOf(opts.string("sticks") ?? "1,2,3,4")
+  options.throttleLow = opts.string("throttleRest") == "low"
+  options.rudderArm = opts.bool("rudderArm")
+  options.go = opts.bool("go")
+  options.fakePad = opts.string("fakePad") ?? ""
+  options.exitAfter = opts.int("exitAfter") ?? -1
+  options.quiet = opts.bool("quiet")
+  options.verbose = opts.bool("verbose")
+  return options
 }
 
 /// Reads the arguments. `interactive` is whether stdin is a terminal: without one the start needs `--go`, else the start is refused
 /// (code 4).
 export function parse(args: string[], interactive: bool): Parsed {
-  const options = new Options()
-  let action = "run"
-  let i = 0
-  while (i < args.length) {
-    let flag = args[i]
-    let value = ""
-    let given = false
-    const at = flag.indexOf("=")
-    if (flag.startsWith("--") && at > 0) {
-      value = flag.slice(at + 1)
-      flag = flag.slice(0, at)
-      given = true
-    }
-    if (WITHOUT_VALUE.includes(flag)) {
-      if (given) {
-        return failure(2, `${flag} takes no value`)
-      }
-      if (flag == "--list") {
-        options.list = true
-        action = "list"
-      } else if (flag == "--rudder-arm") {
-        options.rudderArm = true
-      } else if (flag == "--go") {
-        options.go = true
-      } else if (flag == "--quiet") {
-        options.quiet = true
-      } else if (flag == "--verbose") {
-        options.verbose = true
-      } else if (flag == "--version") {
-        action = "version"
-      } else {
-        action = "help"
-      }
-    } else if (WITH_VALUE.includes(flag)) {
-      if (!given) {
-        i += 1
-        if (i >= args.length) {
-          return failure(2, `${flag} wants a value`)
-        }
-        value = args[i]
-      }
-      const problem = apply(options, flag, value)
-      if (problem != "") {
-        return failure(2, problem)
-      }
-    } else {
-      return failure(2, `unknown option ${args[i]}`)
-    }
-    i += 1
-  }
-  if (options.portOf() > 65535) {
-    return failure(2, `--instance ${options.instance}: the port 5501 + 10 n is over 65535`)
-  }
-  if (action == "run" && !interactive && !options.go) {
-    return failure(4, "stdin is not a terminal: there is nobody to press Enter. Start it with --go (it then sends as soon as the sticks are at rest)")
-  }
+  const capture = new Capture()
+  const command = program(capture)
   const parsed = new Parsed()
-  parsed.action = action
+  try {
+    command.parse(args)
+  } catch (e: CommanderError) {
+    if (e.code == "commander.helpDisplayed") {
+      parsed.action = "help"
+      parsed.message = capture.out.trimEnd()
+    } else if (e.code == "commander.version") {
+      parsed.action = "version"
+      parsed.message = capture.out.trimEnd()
+    } else {
+      parsed.action = "error"
+      parsed.code = 2
+      parsed.message = capture.err.trimEnd()
+    }
+    return parsed
+  } catch (e: Error) {
+    parsed.action = "error"
+    parsed.code = 2
+    parsed.message = `error: ${e.message}`
+    return parsed
+  }
+  const options = optionsOf(command.opts())
+  if (options.list) {
+    parsed.action = "list"
+  } else if (!interactive && !options.go) {
+    parsed.action = "error"
+    parsed.code = 4
+    parsed.message = "stdin is not a terminal: there is nobody to press Enter. Start it with --go (it then sends as soon as the sticks are at rest)"
+    return parsed
+  }
   parsed.options = options
   return parsed
 }
